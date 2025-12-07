@@ -61,14 +61,66 @@ const modelsByProvider: Record<string, { value: string; label: string }[]> = {
 };
 
 const voiceProviders = [
-  { value: "elevenlabs", label: "ElevenLabs" },
-  { value: "azure", label: "Azure TTS" },
+  { value: "elevenlabs", label: "ElevenLabs (Best Quality)" },
+  { value: "azure", label: "Azure TTS (Best Arabic - Fast & Cheap)" },
   { value: "google", label: "Google TTS" },
   { value: "openai", label: "OpenAI TTS" },
-  { value: "deepgram", label: "Deepgram" },
-  { value: "cartesia", label: "Cartesia" },
+  { value: "deepgram", label: "Deepgram (Fastest)" },
+  { value: "cartesia", label: "Cartesia (Ultra-Low Latency)" },
   { value: "playht", label: "PlayHT" },
 ];
+
+// Voices organized by provider
+const voicesByProvider: Record<string, { value: string; label: string; gender: string; language: string }[]> = {
+  azure: [
+    { value: "ar-SA-HamedNeural", label: "Hamed (Saudi Male)", gender: "male", language: "ar-SA" },
+    { value: "ar-SA-ZariyahNeural", label: "Zariyah (Saudi Female)", gender: "female", language: "ar-SA" },
+    { value: "ar-EG-ShakirNeural", label: "Shakir (Egyptian Male)", gender: "male", language: "ar-EG" },
+    { value: "ar-EG-SalmaNeural", label: "Salma (Egyptian Female)", gender: "female", language: "ar-EG" },
+    { value: "ar-AE-FatimaNeural", label: "Fatima (UAE Female)", gender: "female", language: "ar-AE" },
+    { value: "ar-AE-HamdanNeural", label: "Hamdan (UAE Male)", gender: "male", language: "ar-AE" },
+    { value: "en-US-JennyNeural", label: "Jenny (US Female)", gender: "female", language: "en-US" },
+    { value: "en-US-GuyNeural", label: "Guy (US Male)", gender: "male", language: "en-US" },
+    { value: "en-GB-SoniaNeural", label: "Sonia (UK Female)", gender: "female", language: "en-GB" },
+  ],
+  elevenlabs: [
+    { value: "EXAVITQu4vr4xnSDxMaL", label: "Sarah (Conversational)", gender: "female", language: "en-US" },
+    { value: "pNInz6obpgDQGcFmaJgB", label: "Adam (Deep & Authoritative)", gender: "male", language: "en-US" },
+    { value: "yoZ06aMxZJJ28mfd3POQ", label: "Sam (Arabic)", gender: "male", language: "ar-SA" },
+    { value: "jsCqWAovK2LkecY7zXl4", label: "Freya (Warm)", gender: "female", language: "en-US" },
+    { value: "TX3LPaxmHKxFdv7VOQHJ", label: "Liam (Articulate)", gender: "male", language: "en-US" },
+  ],
+  deepgram: [
+    { value: "aura-asteria-en", label: "Asteria (Fast & Natural)", gender: "female", language: "en-US" },
+    { value: "aura-zeus-en", label: "Zeus (Deep)", gender: "male", language: "en-US" },
+    { value: "aura-orpheus-en", label: "Orpheus (Warm)", gender: "male", language: "en-US" },
+    { value: "aura-angus-en", label: "Angus (Irish)", gender: "male", language: "en-US" },
+    { value: "aura-luna-en", label: "Luna (Soft)", gender: "female", language: "en-US" },
+  ],
+  openai: [
+    { value: "alloy", label: "Alloy (Neutral)", gender: "neutral", language: "multi" },
+    { value: "echo", label: "Echo (Male)", gender: "male", language: "multi" },
+    { value: "fable", label: "Fable (British)", gender: "male", language: "multi" },
+    { value: "onyx", label: "Onyx (Deep Male)", gender: "male", language: "multi" },
+    { value: "nova", label: "Nova (Female)", gender: "female", language: "multi" },
+    { value: "shimmer", label: "Shimmer (Warm Female)", gender: "female", language: "multi" },
+  ],
+  google: [
+    { value: "ar-XA-Standard-A", label: "Arabic Standard A", gender: "female", language: "ar" },
+    { value: "ar-XA-Standard-B", label: "Arabic Standard B", gender: "male", language: "ar" },
+    { value: "ar-XA-Wavenet-A", label: "Arabic Wavenet A (Premium)", gender: "female", language: "ar" },
+    { value: "en-US-Neural2-A", label: "US Neural2 A", gender: "female", language: "en-US" },
+    { value: "en-US-Neural2-D", label: "US Neural2 D", gender: "male", language: "en-US" },
+  ],
+  cartesia: [
+    { value: "sonic-english", label: "Sonic English", gender: "male", language: "en-US" },
+    { value: "sonic-multilingual", label: "Sonic Multilingual", gender: "male", language: "multi" },
+  ],
+  playht: [
+    { value: "s3://peregrine-voices/oliver_narrative", label: "Oliver (Narrative)", gender: "male", language: "en-US" },
+    { value: "s3://peregrine-voices/susan_calm", label: "Susan (Calm)", gender: "female", language: "en-US" },
+  ],
+};
 
 const transcriberProviders = [
   { value: "deepgram", label: "Deepgram" },
@@ -385,34 +437,63 @@ export default function AssistantEditorPage() {
             <Card>
               <CardHeader>
                 <CardTitle>Voice Provider</CardTitle>
-                <CardDescription>Select the TTS provider and voice</CardDescription>
+                <CardDescription>Select the TTS provider</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Provider</label>
                   <Select
                     value={formData.voiceProvider}
-                    onChange={(v) => updateFormData("voiceProvider", v)}
+                    onChange={(v) => {
+                      updateFormData("voiceProvider", v);
+                      // Auto-select first voice for this provider
+                      const voices = voicesByProvider[v] || [];
+                      if (voices.length > 0) {
+                        updateFormData("voiceId", voices[0].value);
+                      }
+                    }}
                     options={voiceProviders}
                   />
                 </div>
 
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Voice ID</label>
-                  <div className="flex gap-2">
-                    <Input
-                      value={formData.voiceId}
-                      onChange={(e) => updateFormData("voiceId", e.target.value)}
-                      placeholder="Enter voice ID or select from library"
-                    />
-                    <Button variant="outline">
-                      <Play className="h-4 w-4" />
-                    </Button>
-                  </div>
-                  <p className="text-xs text-[var(--muted-foreground)]">
-                    Browse the <a href="/voice-library" className="text-[var(--primary)] hover:underline">Voice Library</a> to find voices
-                  </p>
+                  <label className="text-sm font-medium">Voice</label>
+                  <Select
+                    value={formData.voiceId}
+                    onChange={(v) => updateFormData("voiceId", v)}
+                    options={(voicesByProvider[formData.voiceProvider] || []).map(v => ({
+                      value: v.value,
+                      label: v.label,
+                    }))}
+                  />
+                  {/* Show voice details */}
+                  {(() => {
+                    const selectedVoice = (voicesByProvider[formData.voiceProvider] || []).find(v => v.value === formData.voiceId);
+                    if (selectedVoice) {
+                      return (
+                        <div className="flex gap-2 mt-2">
+                          <Badge variant="outline">{selectedVoice.gender}</Badge>
+                          <Badge variant="outline">{selectedVoice.language}</Badge>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
                 </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Custom Voice ID</label>
+                  <Input
+                    value={formData.voiceId}
+                    onChange={(e) => updateFormData("voiceId", e.target.value)}
+                    placeholder="Or enter custom voice ID"
+                  />
+                </div>
+
+                <Button variant="outline" className="w-full">
+                  <Play className="h-4 w-4 mr-2" />
+                  Preview Voice
+                </Button>
               </CardContent>
             </Card>
 
