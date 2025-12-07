@@ -114,6 +114,47 @@ async def get_recording_info(recording_id: str):
         "valid": riff == "RIFF" and wave == "WAVE" and audio_format == 1,
     }
 
+
+from pydantic import BaseModel
+
+class PreviewVoiceRequest(BaseModel):
+    text: str
+    provider: str
+    voice_id: str
+    api_key: str
+    region: str = ""
+
+
+@router.post("/preview-voice")
+async def preview_voice(request: PreviewVoiceRequest):
+    """
+    Generate a voice preview using the specified TTS provider
+    Returns MP3 audio for playback
+    """
+    try:
+        logger.info(f"🎤 Voice preview: provider={request.provider}, voice={request.voice_id}")
+
+        tts = TTSService(
+            provider=request.provider,
+            api_key=request.api_key,
+            voice_id=request.voice_id,
+            region=request.region,
+        )
+
+        audio_mp3 = await tts.synthesize(request.text, output_format="mp3")
+
+        from fastapi.responses import Response
+        return Response(
+            content=audio_mp3,
+            media_type="audio/mpeg",
+            headers={"Content-Disposition": "inline; filename=preview.mp3"}
+        )
+
+    except Exception as e:
+        logger.error(f"Preview error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 # ============== Pricing (per unit) ==============
 PRICING = {
     # STT Pricing (per minute)

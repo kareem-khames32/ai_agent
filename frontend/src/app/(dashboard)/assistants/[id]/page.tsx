@@ -16,6 +16,7 @@ import {
   ArrowLeft,
   Save,
   Play,
+  Square,
   Phone,
   Bot,
   Mic,
@@ -154,6 +155,96 @@ export default function AssistantEditorPage() {
   const [activeTab, setActiveTab] = React.useState("model");
   const [isSaving, setIsSaving] = React.useState(false);
   const [isExpandedPrompt, setIsExpandedPrompt] = React.useState(false);
+  const [isPreviewPlaying, setIsPreviewPlaying] = React.useState(false);
+  const audioRef = React.useRef<HTMLAudioElement | null>(null);
+
+  // Preview voice function
+  const handlePreviewVoice = async () => {
+    if (isPreviewPlaying) {
+      // Stop current preview
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+      setIsPreviewPlaying(false);
+      return;
+    }
+
+    setIsPreviewPlaying(true);
+
+    try {
+      // Get TTS credentials from localStorage
+      const creds = localStorage.getItem("provider_credentials");
+      const credentials = creds ? JSON.parse(creds) : {};
+
+      const provider = formData.voiceProvider;
+      let apiKey = "";
+      let region = "";
+
+      switch (provider) {
+        case "azure":
+          apiKey = credentials.azure_tts?.api_key || "";
+          region = credentials.azure_tts?.region || "eastus";
+          break;
+        case "elevenlabs":
+          apiKey = credentials.elevenlabs?.api_key || "";
+          break;
+        case "openai":
+          apiKey = credentials.openai_tts?.api_key || credentials.openai?.api_key || "";
+          break;
+      }
+
+      if (!apiKey) {
+        alert("Please configure TTS API key in Settings first");
+        setIsPreviewPlaying(false);
+        return;
+      }
+
+      // Sample preview text
+      const previewText = formData.transcriberLanguage?.startsWith("ar")
+        ? "مرحباً، كيف يمكنني مساعدتك اليوم؟"
+        : "Hello, how can I help you today?";
+
+      // Call backend TTS preview endpoint
+      const response = await fetch("http://localhost:8000/api/realtime/preview-voice", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: previewText,
+          provider: provider,
+          voice_id: formData.voiceId,
+          api_key: apiKey,
+          region: region,
+        }),
+      });
+
+      if (response.ok) {
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audioRef.current = audio;
+
+        audio.onended = () => {
+          setIsPreviewPlaying(false);
+          URL.revokeObjectURL(url);
+        };
+
+        audio.onerror = () => {
+          setIsPreviewPlaying(false);
+          URL.revokeObjectURL(url);
+        };
+
+        await audio.play();
+      } else {
+        alert("Failed to preview voice. Check your API key and voice ID.");
+        setIsPreviewPlaying(false);
+      }
+    } catch (error) {
+      console.error("Preview error:", error);
+      alert("Failed to preview voice");
+      setIsPreviewPlaying(false);
+    }
+  };
 
   // Form state
   const [formData, setFormData] = React.useState({
@@ -490,9 +581,23 @@ export default function AssistantEditorPage() {
                   />
                 </div>
 
-                <Button variant="outline" className="w-full">
-                  <Play className="h-4 w-4 mr-2" />
-                  Preview Voice
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  onClick={handlePreviewVoice}
+                  disabled={!formData.voiceId}
+                >
+                  {isPreviewPlaying ? (
+                    <>
+                      <Square className="h-4 w-4 mr-2" />
+                      Stop Preview
+                    </>
+                  ) : (
+                    <>
+                      <Play className="h-4 w-4 mr-2" />
+                      Preview Voice
+                    </>
+                  )}
                 </Button>
               </CardContent>
             </Card>

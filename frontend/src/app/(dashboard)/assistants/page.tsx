@@ -356,7 +356,26 @@ export default function AssistantsPage() {
                       <Copy className="h-4 w-4 mr-2" />
                       Duplicate
                     </DropdownMenuItem>
-                    <DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => {
+                        // Save assistant config for live-call to use
+                        localStorage.setItem("test_assistant", JSON.stringify({
+                          id: assistant.id,
+                          name: assistant.name,
+                          modelProvider: assistant.modelProvider,
+                          modelName: assistant.modelName,
+                          systemPrompt: assistant.systemPrompt,
+                          firstMessage: assistant.firstMessage,
+                          firstMessageMode: assistant.firstMessageMode,
+                          temperature: assistant.temperature,
+                          voiceProvider: assistant.voiceProvider,
+                          voiceId: assistant.voiceId,
+                          transcriberProvider: assistant.transcriberProvider,
+                          transcriberLanguage: assistant.transcriberLanguage,
+                        }));
+                        router.push(`/live-call?assistant=${assistant.id}`);
+                      }}
+                    >
                       <Phone className="h-4 w-4 mr-2" />
                       Test Call
                     </DropdownMenuItem>
