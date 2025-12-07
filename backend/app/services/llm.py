@@ -234,6 +234,10 @@ class LLMService:
         if system_prompt:
             payload["system"] = system_prompt
 
+        logger.info(f"📤 Anthropic stream: model={self.model}, messages={len(anthropic_messages)}")
+        if not anthropic_messages:
+            logger.error("❌ No messages to send to Anthropic!")
+
         # Use shared client for connection reuse
         client = get_http_client("https://api.anthropic.com")
         async with client.stream(
