@@ -28,6 +28,7 @@ interface SidebarProps {
 const navigation = [
   { name: "Overview", href: "/overview", icon: LayoutDashboard },
   { name: "Live Call", href: "/live-call", icon: Zap },
+  { name: "Test Call", href: "/test-call", icon: PhoneCall },
   { name: "Assistants", href: "/assistants", icon: Bot },
   { name: "Tools", href: "/tools", icon: Wrench },
   { name: "Phone Numbers", href: "/phone-numbers", icon: Phone },

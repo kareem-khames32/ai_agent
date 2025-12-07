@@ -118,7 +118,7 @@ export default function TestCallPage() {
     setStatus("connecting");
 
     try {
-      const ws = new WebSocket(`ws://localhost:8000/api/voice/ws/${callId}`);
+      const ws = new WebSocket(`ws://localhost:8000/api/realtime/realtime/${callId}`);
       wsRef.current = ws;
 
       ws.onopen = () => {
