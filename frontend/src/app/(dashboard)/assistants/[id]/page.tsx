@@ -172,7 +172,10 @@ export default function AssistantEditorPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline">
+          <Button
+            variant="outline"
+            onClick={() => router.push(`/live-call?assistant=${params.id}`)}
+          >
             <Phone className="h-4 w-4 mr-2" />
             Test Call
           </Button>
