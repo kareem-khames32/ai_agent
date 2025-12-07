@@ -185,6 +185,8 @@ class LLMService:
                 json=payload,
                 timeout=60.0,
             )
+            if response.status_code != 200:
+                logger.error(f"❌ Anthropic API error: {response.status_code} - {response.text}")
             response.raise_for_status()
             result = response.json()
 
@@ -241,6 +243,9 @@ class LLMService:
             json=payload,
             timeout=60.0,
         ) as response:
+            if response.status_code != 200:
+                error_text = await response.aread()
+                logger.error(f"❌ Anthropic API error: {response.status_code} - {error_text.decode()}")
             response.raise_for_status()
             async for line in response.aiter_lines():
                 if line.startswith("data: "):
