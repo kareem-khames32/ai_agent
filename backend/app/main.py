@@ -16,13 +16,20 @@ async def lifespan(app: FastAPI):
     """Application lifespan events"""
     # Startup
     logger.info("Starting Voice AI Platform...")
-    await init_db()
-    logger.info("Database initialized")
+    try:
+        await init_db()
+        logger.info("Database initialized")
+    except Exception as e:
+        logger.warning(f"⚠️ Database connection failed: {e}")
+        logger.info("🎙️ Running without database - Live Call features will still work!")
     yield
     # Shutdown
     logger.info("Shutting down...")
-    await close_db()
-    logger.info("Database connections closed")
+    try:
+        await close_db()
+        logger.info("Database connections closed")
+    except Exception:
+        pass
 
 
 # Create FastAPI app
