@@ -145,10 +145,64 @@ export default function AssistantEditorPage() {
     setFormData((prev) => ({ ...prev, [field]: value }));
   };
 
+  // Load assistant data from localStorage on mount
+  React.useEffect(() => {
+    if (!isNew && params.id) {
+      const saved = localStorage.getItem("assistants");
+      if (saved) {
+        try {
+          const assistants = JSON.parse(saved);
+          const assistant = assistants[params.id as string];
+          if (assistant) {
+            setFormData(assistant);
+          }
+        } catch (e) {
+          console.error("Failed to load assistant:", e);
+        }
+      }
+    }
+  }, [isNew, params.id]);
+
   const handleSave = async () => {
     setIsSaving(true);
-    // Simulate API call
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+
+    try {
+      // Save to localStorage
+      const saved = localStorage.getItem("assistants");
+      const assistants = saved ? JSON.parse(saved) : {};
+
+      const assistantId = isNew ? `assistant-${Date.now()}` : params.id;
+      assistants[assistantId as string] = {
+        ...formData,
+        id: assistantId,
+        updatedAt: new Date().toISOString(),
+        createdAt: assistants[assistantId as string]?.createdAt || new Date().toISOString(),
+      };
+
+      localStorage.setItem("assistants", JSON.stringify(assistants));
+
+      // Also save as test_assistant for live-call to use
+      localStorage.setItem("test_assistant", JSON.stringify({
+        id: assistantId,
+        name: formData.name,
+        modelProvider: formData.modelProvider,
+        modelName: formData.modelName,
+        systemPrompt: formData.systemPrompt,
+        firstMessage: formData.firstMessage,
+        firstMessageMode: formData.firstMessageMode,
+        temperature: formData.temperature,
+        voiceProvider: formData.voiceProvider,
+        voiceId: formData.voiceId,
+        voiceSpeed: formData.voiceSpeed,
+        transcriberProvider: formData.transcriberProvider,
+        transcriberLanguage: formData.transcriberLanguage,
+      }));
+
+      console.log("✅ Assistant saved:", assistantId);
+    } catch (e) {
+      console.error("Failed to save assistant:", e);
+    }
+
     setIsSaving(false);
     router.push("/assistants");
   };

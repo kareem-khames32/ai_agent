@@ -150,8 +150,55 @@ export default function AssistantsPage() {
   const [isLoading, setIsLoading] = React.useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
   const [assistantToDelete, setAssistantToDelete] = React.useState<string | null>(null);
+  const [assistants, setAssistants] = React.useState<(typeof mockAssistants)>(mockAssistants);
 
-  const filteredAssistants = mockAssistants.filter((assistant) =>
+  // Load assistants from localStorage on mount
+  React.useEffect(() => {
+    const saved = localStorage.getItem("assistants");
+    if (saved) {
+      try {
+        const savedAssistants = JSON.parse(saved);
+        const savedList = Object.values(savedAssistants).map((a: unknown) => {
+          const assistant = a as Record<string, unknown>;
+          return {
+            id: assistant.id as string,
+            organizationId: "org1",
+            name: assistant.name as string || "Unnamed",
+            modelProvider: (assistant.modelProvider as string) || "anthropic",
+            modelName: (assistant.modelName as string) || "claude-sonnet-4-20250514",
+            systemPrompt: (assistant.systemPrompt as string) || "",
+            firstMessage: (assistant.firstMessage as string) || "",
+            firstMessageMode: (assistant.firstMessageMode as string) || "assistant-speaks-first",
+            temperature: (assistant.temperature as number) || 0.7,
+            maxTokens: (assistant.maxTokens as number) || 1024,
+            voiceProvider: (assistant.voiceProvider as string) || "elevenlabs",
+            voiceId: (assistant.voiceId as string) || "",
+            voiceSettings: {},
+            transcriberProvider: (assistant.transcriberProvider as string) || "deepgram",
+            transcriberLanguage: (assistant.transcriberLanguage as string) || "ar-SA",
+            transcriberSettings: {},
+            tools: [],
+            summaryPrompt: "",
+            successEvaluationPrompt: "",
+            structuredDataSchema: {},
+            advancedSettings: {},
+            createdAt: (assistant.createdAt as string) || new Date().toISOString(),
+            updatedAt: (assistant.updatedAt as string) || new Date().toISOString(),
+            costPerMin: 0.15,
+            latencyMs: 450,
+          };
+        });
+        // Combine saved with mock, saved takes precedence
+        const mockIds = mockAssistants.map(m => m.id);
+        const uniqueSaved = savedList.filter((s: { id: string }) => !mockIds.includes(s.id));
+        setAssistants([...mockAssistants, ...uniqueSaved] as typeof mockAssistants);
+      } catch (e) {
+        console.error("Failed to load saved assistants:", e);
+      }
+    }
+  }, []);
+
+  const filteredAssistants = assistants.filter((assistant) =>
     assistant.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
@@ -165,8 +212,22 @@ export default function AssistantsPage() {
   };
 
   const confirmDelete = () => {
-    // API call to delete
-    console.log("Deleting assistant:", assistantToDelete);
+    if (assistantToDelete) {
+      // Delete from localStorage
+      const saved = localStorage.getItem("assistants");
+      if (saved) {
+        try {
+          const savedAssistants = JSON.parse(saved);
+          delete savedAssistants[assistantToDelete];
+          localStorage.setItem("assistants", JSON.stringify(savedAssistants));
+        } catch (e) {
+          console.error("Failed to delete assistant:", e);
+        }
+      }
+      // Remove from state
+      setAssistants(prev => prev.filter(a => a.id !== assistantToDelete));
+      console.log("Deleted assistant:", assistantToDelete);
+    }
     setDeleteDialogOpen(false);
     setAssistantToDelete(null);
   };
