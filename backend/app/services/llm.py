@@ -125,23 +125,31 @@ class LLMService:
         temperature: float = 0.7,
     ) -> AsyncGenerator[str, None]:
         """Stream response from the LLM"""
-        if self.provider == "anthropic":
-            async for chunk in self._anthropic_stream(messages, system_prompt, max_tokens, temperature):
-                yield chunk
-        elif self.provider == "openai":
-            async for chunk in self._openai_stream(messages, system_prompt, max_tokens, temperature):
-                yield chunk
-        elif self.provider == "google":
-            async for chunk in self._google_stream(messages, system_prompt, max_tokens, temperature):
-                yield chunk
-        elif self.provider == "groq":
-            async for chunk in self._groq_stream(messages, system_prompt, max_tokens, temperature):
-                yield chunk
-        elif self.provider == "together":
-            async for chunk in self._together_stream(messages, system_prompt, max_tokens, temperature):
-                yield chunk
-        else:
-            raise ValueError(f"Unknown LLM provider: {self.provider}")
+        try:
+            if self.provider == "anthropic":
+                async for chunk in self._anthropic_stream(messages, system_prompt, max_tokens, temperature):
+                    yield chunk
+            elif self.provider == "openai":
+                async for chunk in self._openai_stream(messages, system_prompt, max_tokens, temperature):
+                    yield chunk
+            elif self.provider == "google":
+                async for chunk in self._google_stream(messages, system_prompt, max_tokens, temperature):
+                    yield chunk
+            elif self.provider == "groq":
+                async for chunk in self._groq_stream(messages, system_prompt, max_tokens, temperature):
+                    yield chunk
+            elif self.provider == "together":
+                async for chunk in self._together_stream(messages, system_prompt, max_tokens, temperature):
+                    yield chunk
+            else:
+                raise ValueError(f"Unknown LLM provider: {self.provider}")
+        except GeneratorExit:
+            # Handle early termination gracefully (e.g., when user interrupts)
+            logger.debug("LLM stream terminated early")
+            return
+        except Exception as e:
+            logger.error(f"LLM stream error: {e}")
+            raise
 
     async def _anthropic_generate(
         self,
@@ -342,25 +350,29 @@ class LLMService:
             "stream": True,
         }
 
-        async with httpx.AsyncClient() as client:
-            async with client.stream(
-                "POST",
-                url,
-                headers=headers,
-                json=payload,
-                timeout=60.0,
-            ) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if line.startswith("data: ") and line != "data: [DONE]":
-                        try:
-                            import json
-                            data = json.loads(line[6:])
-                            delta = data["choices"][0].get("delta", {})
-                            if "content" in delta:
-                                yield delta["content"]
-                        except:
-                            continue
+        try:
+            async with httpx.AsyncClient() as client:
+                async with client.stream(
+                    "POST",
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=60.0,
+                ) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if line.startswith("data: ") and line != "data: [DONE]":
+                            try:
+                                import json
+                                data = json.loads(line[6:])
+                                delta = data["choices"][0].get("delta", {})
+                                if "content" in delta:
+                                    yield delta["content"]
+                            except:
+                                continue
+        except GeneratorExit:
+            logger.debug("OpenAI stream terminated early")
+            return
 
     async def _google_generate(
         self,
