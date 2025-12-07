@@ -160,6 +160,9 @@ export default function LiveCallPage() {
   // 🔊 Audio Queue for gapless playback
   const audioQueueRef = React.useRef<string[]>([]);
   const isPlayingRef = React.useRef(false);
+  const audioInterruptedRef = React.useRef(false);  // Flag to block audio after interrupt
+  const isAISpeakingRef = React.useRef(false);  // Track AI speaking for barge-in
+  const lastBargeInTimeRef = React.useRef(0);  // Debounce barge-in signals
 
   // Latency tracking refs
   const speechEndTimeRef = React.useRef<number | null>(null); // When user stops speaking
@@ -194,6 +197,10 @@ export default function LiveCallPage() {
   React.useEffect(() => {
     isMutedRef.current = isMuted;
   }, [isMuted]);
+
+  React.useEffect(() => {
+    isAISpeakingRef.current = isAISpeaking;
+  }, [isAISpeaking]);
 
   React.useEffect(() => {
     transcriptRef.current = transcript;
@@ -640,11 +647,15 @@ export default function LiveCallPage() {
 
           case "thinking":
             setIsThinking(true);
+            // Reset interrupted flag - AI is starting new response
+            audioInterruptedRef.current = false;
             break;
 
           case "speaking":
             setIsThinking(false);
             setIsAISpeaking(true);
+            // Reset interrupted flag - AI is speaking
+            audioInterruptedRef.current = false;
             break;
 
           case "audio":
@@ -671,15 +682,19 @@ export default function LiveCallPage() {
             break;
 
           case "interrupted":
-            // User interrupted the AI - clear audio queue and stop current audio
+          case "stop_audio":
+            // User interrupted the AI - STOP EVERYTHING NOW!
+            console.log("🛑🛑🛑 STOPPING ALL AUDIO - USER INTERRUPTED!");
             clearAudioQueue();
             setIsAISpeaking(false);
-            callStatusRef.current = "interrupted";
-            console.log("🛑 AI speech interrupted by user");
+            if (message.type === "interrupted") {
+              callStatusRef.current = "interrupted";
+            }
             break;
 
           case "speech_cancelled":
             // Speech was cancelled due to interruption
+            clearAudioQueue();
             setIsAISpeaking(false);
             console.log("🔇 Speech cancelled");
             break;
@@ -894,22 +909,29 @@ export default function LiveCallPage() {
           const rms = Math.sqrt(sum / inputData.length);
           const hasVoice = rms > SILENCE_THRESHOLD;
 
-          if (hasVoice) {
-            // Voice detected - send audio
-            silenceStart = 0;
-            if (!isSpeakingNow) {
-              isSpeakingNow = true;
-              setIsSpeaking(true);
-              console.log("🎤 Speech started");
-            }
+          // Convert float32 to int16
+          const pcmData = new Int16Array(inputData.length);
+          for (let i = 0; i < inputData.length; i++) {
+            const s = Math.max(-1, Math.min(1, inputData[i]));
+            pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+          }
 
-            // Convert float32 to int16
-            const pcmData = new Int16Array(inputData.length);
-            for (let i = 0; i < inputData.length; i++) {
-              const s = Math.max(-1, Math.min(1, inputData[i]));
-              pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+          // 🛑 BARGE-IN DETECTION: User speaking while AI is playing = INTERRUPT!
+          if (hasVoice && isAISpeakingRef.current) {
+            const now = Date.now();
+            // Debounce: only send barge-in once per second
+            if (now - lastBargeInTimeRef.current > 1000) {
+              console.log("🛑🛑🛑 BARGE-IN DETECTED! User speaking while AI playing! 🛑🛑🛑");
+              lastBargeInTimeRef.current = now;
+              // Send barge-in signal to backend
+              wsRef.current.send(JSON.stringify({ type: "barge_in" }));
+              // Immediately stop audio on frontend
+              clearAudioQueue();
             }
+          }
 
+          // ALWAYS send audio when AI is speaking (for barge-in detection) or when user has voice
+          if (hasVoice || isAISpeakingRef.current) {
             // Send as base64
             const base64 = btoa(String.fromCharCode(...new Uint8Array(pcmData.buffer)));
             wsRef.current.send(JSON.stringify({
@@ -917,11 +939,23 @@ export default function LiveCallPage() {
               data: base64,
             }));
 
-            chunkCount++;
-            if (chunkCount % 50 === 0) {
-              console.log(`Sent ${chunkCount} audio chunks, RMS: ${rms.toFixed(4)}`);
+            if (hasVoice) {
+              // Voice detected
+              silenceStart = 0;
+              if (!isSpeakingNow) {
+                isSpeakingNow = true;
+                setIsSpeaking(true);
+                console.log("🎤 Speech started");
+              }
+
+              chunkCount++;
+              if (chunkCount % 50 === 0) {
+                console.log(`Sent ${chunkCount} audio chunks, RMS: ${rms.toFixed(4)}`);
+              }
             }
-          } else {
+          }
+
+          if (!hasVoice) {
             // Silence detected
             if (isSpeakingNow) {
               if (silenceStart === 0) {
@@ -967,6 +1001,14 @@ export default function LiveCallPage() {
 
   // 🔊 Play next audio from queue
   const playNextFromQueue = () => {
+    // Check if interrupted - stop playing
+    if (audioInterruptedRef.current) {
+      console.log("🚫 Playback blocked - user interrupted");
+      isPlayingRef.current = false;
+      setIsAISpeaking(false);
+      return;
+    }
+
     if (audioQueueRef.current.length === 0) {
       isPlayingRef.current = false;
       setIsAISpeaking(false);
@@ -982,25 +1024,37 @@ export default function LiveCallPage() {
 
     audio.onended = () => {
       URL.revokeObjectURL(url);
-      // Play next in queue
-      playNextFromQueue();
+      // Play next in queue (if not interrupted)
+      if (!audioInterruptedRef.current) {
+        playNextFromQueue();
+      }
     };
 
     audio.onerror = () => {
       URL.revokeObjectURL(url);
       console.error("Audio playback error");
-      // Try next in queue
-      playNextFromQueue();
+      // Try next in queue (if not interrupted)
+      if (!audioInterruptedRef.current) {
+        playNextFromQueue();
+      }
     };
 
     audio.play().catch(err => {
       console.error("Audio play failed:", err);
-      playNextFromQueue();
+      if (!audioInterruptedRef.current) {
+        playNextFromQueue();
+      }
     });
   };
 
   // 🔊 Queue audio for gapless playback
   const playAudio = (base64Audio: string) => {
+    // Check if interrupted - don't queue new audio
+    if (audioInterruptedRef.current) {
+      console.log("🚫 Audio blocked - user interrupted");
+      return;
+    }
+
     try {
       const byteChars = atob(base64Audio);
       const byteNums = new Array(byteChars.length);
@@ -1028,6 +1082,9 @@ export default function LiveCallPage() {
   const clearAudioQueue = () => {
     console.log("🛑 STOPPING ALL AUDIO NOW!");
 
+    // 🛑 SET INTERRUPTED FLAG FIRST - blocks any new audio from being queued/played
+    audioInterruptedRef.current = true;
+
     // Stop current audio FIRST
     if (audioRef.current) {
       audioRef.current.pause();
@@ -1044,7 +1101,7 @@ export default function LiveCallPage() {
     isPlayingRef.current = false;
     setIsAISpeaking(false);
 
-    console.log("🔇 Audio queue cleared, playback stopped");
+    console.log("🔇 Audio queue cleared, playback stopped, interrupted flag set");
   };
 
   // Reset

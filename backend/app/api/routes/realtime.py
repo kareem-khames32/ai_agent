@@ -665,6 +665,7 @@ class RealtimeVoiceSession:
         await self.client_ws.send_json({"type": "thinking"})
 
         full_response = ""
+        spoken_text = ""  # 🎯 Track ONLY what was actually sent as audio
         token_count = 0
         sentence_buffer = ""
 
@@ -680,10 +681,11 @@ class RealtimeVoiceSession:
         sentence_queue: asyncio.Queue[str | None] = asyncio.Queue()
         tts_done = asyncio.Event()
         first_audio_sent = False
+        spoken_sentences: list[str] = []  # Track sentences that were actually spoken
 
         async def tts_worker():
             """Process TTS in order"""
-            nonlocal first_audio_sent
+            nonlocal first_audio_sent, spoken_sentences
             seq = 0
 
             while not self.should_stop_speaking:
@@ -711,7 +713,7 @@ class RealtimeVoiceSession:
 
                     # Check IMMEDIATELY after synthesis if we should stop
                     if self.should_stop_speaking:
-                        logger.info(f"🛑 Stopping TTS - user interrupted")
+                        logger.info(f"🛑 Stopping TTS - user interrupted (before sending)")
                         break
 
                     tts_ms = int((time.time() - tts_start) * 1000)
@@ -724,6 +726,9 @@ class RealtimeVoiceSession:
                             "data": audio_b64,
                             "sequence": seq,
                         })
+                        # 🎯 Track this sentence as SPOKEN (audio was sent to frontend)
+                        spoken_sentences.append(text.strip())
+                        logger.info(f"✅ Sentence spoken: '{text[:30]}...'")
 
                     # Record AI audio in BACKGROUND (doesn't block playback)
                     if self.recording_enabled and text.strip():
@@ -818,20 +823,32 @@ class RealtimeVoiceSession:
             total_ms = int((time.time() - llm_start) * 1000)
             logger.info(f"✅ Total: {total_ms}ms, {token_count} tokens")
 
+            # 🎯 Determine what to save: spoken_text (if interrupted) or full_response
+            spoken_text = " ".join(spoken_sentences).strip()
+            was_interrupted = self.should_stop_speaking or len(spoken_sentences) < len(full_response.split('.'))
+
+            # Use spoken_text if we were interrupted, otherwise use full response
+            text_to_save = spoken_text if (was_interrupted and spoken_text) else full_response.strip()
+
+            if was_interrupted and spoken_text:
+                logger.info(f"🛑 Interrupted! Saving only spoken: '{spoken_text[:50]}...' (vs full: '{full_response[:50]}...')")
+            else:
+                logger.info(f"✅ Complete response: '{text_to_save[:50]}...'")
+
             # Send transcript
-            if full_response.strip():
+            if text_to_save:
                 await self.client_ws.send_json({
                     "type": "transcript",
                     "role": "assistant",
-                    "text": full_response.strip(),
+                    "text": text_to_save,
                 })
-                self.messages.append(Message(role="assistant", content=full_response.strip()))
+                self.messages.append(Message(role="assistant", content=text_to_save))
 
-                # Track costs
+                # Track costs (only for what was actually spoken)
                 input_tokens = sum(len(m.content) for m in self.messages) // 4
-                output_tokens = len(full_response) // 4
+                output_tokens = len(text_to_save) // 4
                 self.cost_tracker.add_llm(input_tokens, output_tokens, self.llm_provider, self.llm_model)
-                self.cost_tracker.add_tts(len(full_response), self.tts_provider)
+                self.cost_tracker.add_tts(len(text_to_save), self.tts_provider)
 
         except Exception as e:
             logger.error(f"Pipeline error: {e}")
@@ -840,7 +857,10 @@ class RealtimeVoiceSession:
             raise
         finally:
             self.is_speaking = False
-            self.should_stop_speaking = True
+            self.is_thinking = False
+            self.should_stop_speaking = False  # Reset for next turn
+            self.should_restart_thinking = False  # Reset for next turn
+            self.is_processing = False  # Reset for next turn
             self.last_ai_speech_time = time.time()  # Track when AI finished speaking
             tts_task.cancel()
 
@@ -1780,6 +1800,26 @@ async def realtime_voice_websocket(
                     logger.info(f"🔇 Speech ended - processing {len(session.audio_buffer)} bytes")
                     if len(session.audio_buffer) > session.min_audio_length:
                         await session.process_audio()
+
+                elif msg_type == "barge_in" and session:
+                    # 🛑 BARGE-IN: User interrupted while AI was speaking
+                    # Frontend detected user speaking while AI audio was playing
+                    logger.info("🛑🛑🛑 BARGE-IN received from frontend! Stopping AI...")
+
+                    # Stop everything
+                    session.should_stop_speaking = True
+                    session.should_restart_thinking = True
+                    session.is_speaking = False
+                    session.is_thinking = False
+
+                    # Tell frontend to stop audio (in case it hasn't already)
+                    await websocket.send_json({"type": "stop_audio"})
+
+                    # Reset processing flags so we can respond to new input
+                    session.is_processing = False
+                    session.audio_buffer = b""  # Clear any buffered audio
+
+                    logger.info("✅ Barge-in handled - ready for new input")
 
                 elif msg_type == "end":
                     logger.info(f"🔚 Session {session_id} ended by client")
