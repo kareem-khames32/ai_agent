@@ -591,6 +591,18 @@ class RealtimeVoiceSession:
             while True:
                 # Check if we should restart with new input from current_transcript
                 if self.should_restart_thinking:
+                    logger.info("🔄 Restart requested - waiting for new transcript...")
+
+                    # Wait a bit for new transcript to arrive from STT
+                    # User might still be speaking, give STT time to transcribe
+                    for _ in range(10):  # Wait up to 2 seconds
+                        await asyncio.sleep(0.2)
+                        if self.current_transcript.strip():
+                            break
+                        # Also check if user is still speaking
+                        if not self.user_is_speaking and time.time() - self.last_transcript_time > 0.5:
+                            break
+
                     new_input = self.current_transcript.strip()
                     if new_input:
                         self.current_transcript = ""  # Clear buffer
@@ -599,7 +611,15 @@ class RealtimeVoiceSession:
                         # Remove last user message if we already added it
                         if self.messages and self.messages[-1].role == "user":
                             self.messages.pop()
+                    else:
+                        # No new input, but we were interrupted - still restart with original
+                        logger.info(f"🔄 No new input, restarting with original: '{transcript}'")
+                        if self.messages and self.messages[-1].role == "user":
+                            self.messages.pop()
+
                     self.should_restart_thinking = False
+                    self.is_thinking = True  # We're thinking again
+                    self.should_stop_speaking = False  # Reset stop flag for new attempt
 
                 # Calculate STT latency
                 stt_latency = int((time.time() - self.speech_start_time) * 1000) if self.speech_start_time else 0
@@ -640,6 +660,7 @@ class RealtimeVoiceSession:
         finally:
             self.is_processing = False
             self.is_thinking = False
+            self.should_restart_thinking = False  # Clean up restart flag
             total_time = int((time.time() - process_start) * 1000)
             logger.info(f"⏱️ Total turn time: {total_time}ms")
 
@@ -796,12 +817,13 @@ class RealtimeVoiceSession:
                 temperature=self.llm_temperature,
             ):
                 if self.should_stop_speaking:
+                    logger.info("🛑 should_stop_speaking detected - breaking LLM loop")
                     break
 
                 # 🔄 Check if user added more input while we're thinking
                 # Only restart if we haven't started speaking yet
                 if self.should_restart_thinking and not self.is_speaking:
-                    logger.info("🔄 User added more input - will restart thinking")
+                    logger.info("🔄 should_restart_thinking detected (not speaking) - will restart")
                     break
 
                 token_count += 1
@@ -900,8 +922,8 @@ class RealtimeVoiceSession:
             self.is_speaking = False
             self.is_thinking = False
             self.should_stop_speaking = False  # Reset for next turn
-            self.should_restart_thinking = False  # Reset for next turn
-            self.is_processing = False  # Reset for next turn
+            # DON'T reset should_restart_thinking here - let process_transcript handle it
+            # The while loop needs to check this flag to decide whether to restart
             self.last_ai_speech_time = time.time()  # Track when AI finished speaking
             tts_task.cancel()
 
@@ -1847,20 +1869,18 @@ async def realtime_voice_websocket(
                     # Frontend detected user speaking while AI audio was playing
                     logger.info("🛑🛑🛑 BARGE-IN received from frontend! Stopping AI...")
 
-                    # Stop everything
+                    # Signal to stop speaking and restart thinking
                     session.should_stop_speaking = True
                     session.should_restart_thinking = True
-                    session.is_speaking = False
-                    session.is_thinking = False
+                    # Note: Don't reset is_speaking/is_thinking/is_processing here
+                    # The running process_transcript will handle these flags
+                    # We just signal that it should restart
 
                     # Tell frontend to stop audio (in case it hasn't already)
                     await websocket.send_json({"type": "stop_audio"})
 
-                    # Reset processing flags so we can respond to new input
-                    session.is_processing = False
-                    session.audio_buffer = b""  # Clear any buffered audio
-
-                    logger.info("✅ Barge-in handled - ready for new input")
+                    # Don't clear audio_buffer - let the restart logic handle the new audio
+                    logger.info("✅ Barge-in signal sent - process_transcript will restart")
 
                 elif msg_type == "end":
                     logger.info(f"🔚 Session {session_id} ended by client")
