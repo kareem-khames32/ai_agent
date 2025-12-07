@@ -88,8 +88,8 @@ class Call(Base):
     summary = Column(Text)
     structured_data = Column(JSONB)
 
-    # Metadata
-    metadata = Column(JSONB)
+    # Call metadata (named call_metadata to avoid SQLAlchemy reserved name conflict)
+    call_metadata = Column(JSONB)
 
     created_at = Column(DateTime, default=datetime.utcnow)
 

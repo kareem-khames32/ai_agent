@@ -144,7 +144,7 @@ async def create_outbound_call(
         customer_phone_number=data.customer_phone_number,
         type="outbound",
         status="queued",
-        metadata=data.metadata,
+        call_metadata=data.metadata,
     )
     db.add(call)
     await db.commit()

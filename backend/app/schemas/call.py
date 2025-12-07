@@ -81,11 +81,12 @@ class CallResponse(BaseModel):
     summary: Optional[str]
     structured_data: Optional[Dict[str, Any]]
 
-    metadata: Optional[Dict[str, Any]]
+    metadata: Optional[Dict[str, Any]] = Field(default=None, validation_alias="call_metadata")
     created_at: datetime
 
     class Config:
         from_attributes = True
+        populate_by_name = True
 
 
 class CallListResponse(BaseModel):
