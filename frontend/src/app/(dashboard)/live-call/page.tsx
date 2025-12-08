@@ -176,20 +176,48 @@ export default function LiveCallPage() {
   const lastAITextTimeRef = React.useRef<number | null>(null);
   const pendingCostRef = React.useRef<CostBreakdown | null>(null); // Store cost from cost_summary
 
-  // Load assistant from localStorage
+  // Load assistant from localStorage (always load last used or specific assistant)
   React.useEffect(() => {
     if (typeof window === "undefined") return;
+
+    let loaded = false;
+
+    // If assistantId is specified, try to load from assistants storage first
     if (assistantId) {
+      const assistants = localStorage.getItem("assistants");
+      if (assistants) {
+        try {
+          const parsed = JSON.parse(assistants);
+          if (parsed[assistantId]) {
+            setAssistant(parsed[assistantId]);
+            setSystemPrompt(parsed[assistantId].systemPrompt || DEFAULT_PROMPT);
+            console.log("✅ Loaded assistant from assistants storage:", parsed[assistantId].name);
+            loaded = true;
+          }
+        } catch {
+          console.error("Failed to load from assistants storage");
+        }
+      }
+    }
+
+    // Always try to load from test_assistant (last used / fallback)
+    if (!loaded) {
       const saved = localStorage.getItem("test_assistant");
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
           setAssistant(parsed);
           setSystemPrompt(parsed.systemPrompt || DEFAULT_PROMPT);
+          console.log("✅ Loaded assistant from test_assistant:", parsed.name);
+          loaded = true;
         } catch {
           console.error("Failed to load assistant config");
         }
       }
+    }
+
+    if (!loaded) {
+      console.log("ℹ️ No saved assistant found, using defaults");
     }
   }, [assistantId]);
 

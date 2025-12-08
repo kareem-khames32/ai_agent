@@ -931,6 +931,29 @@ class RealtimeVoiceSession:
             logger.error(f"Pipeline error: {e}")
             import traceback
             traceback.print_exc()
+
+            # Send user-friendly error message
+            error_msg = str(e).lower()
+            if "credit balance" in error_msg or "insufficient" in error_msg:
+                await self.client_ws.send_json({
+                    "type": "error",
+                    "message": f"⚠️ رصيد API غير كافي ({self.llm_provider}). الرجاء شحن الحساب أو استخدام provider آخر.",
+                })
+            elif "401" in error_msg or "unauthorized" in error_msg or "invalid api key" in error_msg:
+                await self.client_ws.send_json({
+                    "type": "error",
+                    "message": f"⚠️ مفتاح API غير صحيح ({self.llm_provider}). الرجاء التحقق من الإعدادات.",
+                })
+            elif "rate limit" in error_msg or "429" in error_msg:
+                await self.client_ws.send_json({
+                    "type": "error",
+                    "message": f"⚠️ تجاوزت حد الطلبات ({self.llm_provider}). انتظر قليلاً وحاول مرة أخرى.",
+                })
+            else:
+                await self.client_ws.send_json({
+                    "type": "error",
+                    "message": f"❌ خطأ: {str(e)[:100]}",
+                })
             raise
         finally:
             self.is_speaking = False
@@ -1112,6 +1135,29 @@ class RealtimeVoiceSession:
             logger.error(f"Non-streaming response error: {e}")
             import traceback
             traceback.print_exc()
+
+            # Send user-friendly error message
+            error_msg = str(e).lower()
+            if "credit balance" in error_msg or "insufficient" in error_msg:
+                await self.client_ws.send_json({
+                    "type": "error",
+                    "message": f"⚠️ رصيد API غير كافي ({self.llm_provider}). الرجاء شحن الحساب أو استخدام provider آخر.",
+                })
+            elif "401" in error_msg or "unauthorized" in error_msg or "invalid api key" in error_msg:
+                await self.client_ws.send_json({
+                    "type": "error",
+                    "message": f"⚠️ مفتاح API غير صحيح ({self.llm_provider}). الرجاء التحقق من الإعدادات.",
+                })
+            elif "rate limit" in error_msg or "429" in error_msg:
+                await self.client_ws.send_json({
+                    "type": "error",
+                    "message": f"⚠️ تجاوزت حد الطلبات ({self.llm_provider}). انتظر قليلاً وحاول مرة أخرى.",
+                })
+            else:
+                await self.client_ws.send_json({
+                    "type": "error",
+                    "message": f"❌ خطأ: {str(e)[:100]}",
+                })
 
     async def transcribe_audio(self, audio_data: bytes) -> str:
         """Transcribe audio using configured STT provider"""
