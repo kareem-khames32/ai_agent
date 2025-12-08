@@ -807,23 +807,37 @@ class RealtimeVoiceSession:
         try:
             llm_start = time.time()
             first_token_time = None
+            llm_stream = None  # Store generator reference for proper cleanup
 
             logger.info(f"📡 LLM: {self.llm_provider}/{self.llm_model}")
 
-            async for token in self.llm.generate_stream(
+            # Create the stream generator and store reference
+            llm_stream = self.llm.generate_stream(
                 messages=self.messages,
                 system_prompt=self.system_prompt,
                 max_tokens=300,
                 temperature=self.llm_temperature,
-            ):
+            )
+
+            async for token in llm_stream:
                 if self.should_stop_speaking:
                     logger.info("🛑 should_stop_speaking detected - breaking LLM loop")
+                    # Properly close the stream before breaking
+                    try:
+                        await llm_stream.aclose()
+                    except Exception:
+                        pass
                     break
 
                 # 🔄 Check if user added more input while we're thinking
                 # Only restart if we haven't started speaking yet
                 if self.should_restart_thinking and not self.is_speaking:
                     logger.info("🔄 should_restart_thinking detected (not speaking) - will restart")
+                    # Properly close the stream before breaking
+                    try:
+                        await llm_stream.aclose()
+                    except Exception:
+                        pass
                     break
 
                 token_count += 1

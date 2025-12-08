@@ -248,26 +248,30 @@ class LLMService:
 
         # Use shared client for connection reuse
         client = get_http_client("https://api.anthropic.com")
-        async with client.stream(
-            "POST",
-            url,
-            headers=headers,
-            json=payload,
-            timeout=60.0,
-        ) as response:
-            if response.status_code != 200:
-                error_text = await response.aread()
-                logger.error(f"❌ Anthropic API error: {response.status_code} - {error_text.decode()}")
-            response.raise_for_status()
-            async for line in response.aiter_lines():
-                if line.startswith("data: "):
-                    try:
-                        import json
-                        data = json.loads(line[6:])
-                        if data["type"] == "content_block_delta":
-                            yield data["delta"].get("text", "")
-                    except:
-                        continue
+        try:
+            async with client.stream(
+                "POST",
+                url,
+                headers=headers,
+                json=payload,
+                timeout=60.0,
+            ) as response:
+                if response.status_code != 200:
+                    error_text = await response.aread()
+                    logger.error(f"❌ Anthropic API error: {response.status_code} - {error_text.decode()}")
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if line.startswith("data: "):
+                        try:
+                            import json
+                            data = json.loads(line[6:])
+                            if data["type"] == "content_block_delta":
+                                yield data["delta"].get("text", "")
+                        except:
+                            continue
+        except GeneratorExit:
+            logger.debug("Anthropic stream terminated early")
+            return
 
     async def _openai_generate(
         self,
@@ -523,6 +527,9 @@ class LLMService:
                                 except:
                                     continue
                         return  # Success, exit retry loop
+            except GeneratorExit:
+                logger.debug("Google stream terminated early")
+                return
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 429:
                     last_error = e
@@ -621,24 +628,28 @@ class LLMService:
 
         # Use shared client for connection reuse (Groq is ultra-fast!)
         client = get_http_client("https://api.groq.com")
-        async with client.stream(
-            "POST",
-            url,
-            headers=headers,
-            json=payload,
-            timeout=60.0,
-        ) as response:
-            response.raise_for_status()
-            async for line in response.aiter_lines():
-                if line.startswith("data: ") and line != "data: [DONE]":
-                    try:
-                        import json
-                        data = json.loads(line[6:])
-                        delta = data["choices"][0].get("delta", {})
-                        if "content" in delta:
-                            yield delta["content"]
-                    except:
-                        continue
+        try:
+            async with client.stream(
+                "POST",
+                url,
+                headers=headers,
+                json=payload,
+                timeout=60.0,
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if line.startswith("data: ") and line != "data: [DONE]":
+                        try:
+                            import json
+                            data = json.loads(line[6:])
+                            delta = data["choices"][0].get("delta", {})
+                            if "content" in delta:
+                                yield delta["content"]
+                        except:
+                            continue
+        except GeneratorExit:
+            logger.debug("Groq stream terminated early")
+            return
 
     # ============== Together AI (OpenAI-compatible) ==============
 
@@ -723,22 +734,26 @@ class LLMService:
             "stream": True,
         }
 
-        async with httpx.AsyncClient() as client:
-            async with client.stream(
-                "POST",
-                url,
-                headers=headers,
-                json=payload,
-                timeout=60.0,
-            ) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if line.startswith("data: ") and line != "data: [DONE]":
-                        try:
-                            import json
-                            data = json.loads(line[6:])
-                            delta = data["choices"][0].get("delta", {})
-                            if "content" in delta:
-                                yield delta["content"]
-                        except:
-                            continue
+        try:
+            async with httpx.AsyncClient() as client:
+                async with client.stream(
+                    "POST",
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=60.0,
+                ) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if line.startswith("data: ") and line != "data: [DONE]":
+                            try:
+                                import json
+                                data = json.loads(line[6:])
+                                delta = data["choices"][0].get("delta", {})
+                                if "content" in delta:
+                                    yield delta["content"]
+                            except:
+                                continue
+        except GeneratorExit:
+            logger.debug("Together stream terminated early")
+            return
