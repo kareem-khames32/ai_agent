@@ -188,10 +188,30 @@ export default function AssistantsPage() {
             latencyMs: 450,
           };
         });
-        // Combine saved with mock, saved takes precedence
+
+        // Create a map of saved assistants by ID for quick lookup
+        const savedById = new Map(savedList.map((s: { id: string }) => [s.id, s]));
+
+        // Merge: use saved data if available, otherwise use mock data
+        const mergedMock = mockAssistants.map(mock => {
+          const savedVersion = savedById.get(mock.id);
+          if (savedVersion) {
+            // Use saved version but keep mock's costPerMin and latencyMs
+            return {
+              ...savedVersion,
+              costPerMin: mock.costPerMin,
+              latencyMs: mock.latencyMs,
+            };
+          }
+          return mock;
+        });
+
+        // Add any saved assistants that are NOT in mock (user-created)
         const mockIds = mockAssistants.map(m => m.id);
-        const uniqueSaved = savedList.filter((s: { id: string }) => !mockIds.includes(s.id));
-        setAssistants([...mockAssistants, ...uniqueSaved] as typeof mockAssistants);
+        const userCreated = savedList.filter((s: { id: string }) => !mockIds.includes(s.id));
+
+        setAssistants([...mergedMock, ...userCreated] as typeof mockAssistants);
+        console.log("✅ Loaded assistants:", mergedMock.length, "mock/edited +", userCreated.length, "user-created");
       } catch (e) {
         console.error("Failed to load saved assistants:", e);
       }

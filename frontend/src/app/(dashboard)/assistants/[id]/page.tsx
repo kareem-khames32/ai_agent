@@ -468,20 +468,129 @@ export default function AssistantEditorPage() {
     setFormData((prev) => ({ ...prev, [field]: value }));
   };
 
-  // Load assistant data from localStorage on mount
+  // Mock assistants data for fallback
+  const mockAssistantsData: Record<string, typeof formData & { id: string }> = {
+    "1": {
+      id: "1",
+      name: "Sales Agent",
+      modelProvider: "anthropic",
+      modelName: "claude-sonnet-4-20250514",
+      temperature: 0.7,
+      maxTokens: 1024,
+      firstMessageMode: "assistant-speaks-first",
+      firstMessage: "مرحبا! كيف يمكنني مساعدتك اليوم؟",
+      systemPrompt: `أنت وكيل مبيعات محترف تعمل لصالح شركة متخصصة. مهمتك هي:
+
+1. الترحيب بالعميل بطريقة ودية ومهنية
+2. فهم احتياجات العميل بدقة
+3. تقديم الحلول المناسبة
+4. الإجابة على جميع الاستفسارات
+5. المساعدة في إتمام عملية البيع
+
+قواعد مهمة:
+- تحدث بالعربية الفصحى السعودية
+- كن مختصراً ومفيداً
+- لا تقدم وعوداً كاذبة
+- احترم خصوصية العميل`,
+      voiceProvider: "elevenlabs",
+      voiceId: "EXAVITQu4vr4xnSDxMaL",
+      voiceSpeed: 1.0,
+      voicePitch: 1.0,
+      transcriberProvider: "deepgram",
+      transcriberModel: "nova-2",
+      transcriberLanguage: "ar-SA",
+      endpointingMs: 500,
+      summaryPrompt: "",
+      successEvaluationPrompt: "",
+      privacyEnabled: false,
+      hipaaEnabled: false,
+      voicemailDetection: true,
+      maxDuration: 1800,
+      silenceTimeout: 30,
+    },
+    "2": {
+      id: "2",
+      name: "Support Agent",
+      modelProvider: "openai",
+      modelName: "gpt-4o",
+      temperature: 0.5,
+      maxTokens: 2048,
+      firstMessageMode: "assistant-speaks-first",
+      firstMessage: "Hello! How can I help you today?",
+      systemPrompt: "You are a helpful support agent. Answer customer questions professionally and accurately.",
+      voiceProvider: "azure",
+      voiceId: "en-US-JennyNeural",
+      voiceSpeed: 1.0,
+      voicePitch: 1.0,
+      transcriberProvider: "azure",
+      transcriberModel: "default",
+      transcriberLanguage: "en-US",
+      endpointingMs: 500,
+      summaryPrompt: "",
+      successEvaluationPrompt: "",
+      privacyEnabled: false,
+      hipaaEnabled: false,
+      voicemailDetection: true,
+      maxDuration: 1800,
+      silenceTimeout: 30,
+    },
+    "3": {
+      id: "3",
+      name: "Collection Agent - Arabic",
+      modelProvider: "anthropic",
+      modelName: "claude-3-5-haiku-20241022",
+      temperature: 0.6,
+      maxTokens: 1024,
+      firstMessageMode: "assistant-speaks-first",
+      firstMessage: "السلام عليكم، معك من شركة...",
+      systemPrompt: "أنت وكيل تحصيل ديون محترف. تحدث بأسلوب مهني ومحترم.",
+      voiceProvider: "elevenlabs",
+      voiceId: "pNInz6obpgDQGcFmaJgB",
+      voiceSpeed: 1.0,
+      voicePitch: 1.0,
+      transcriberProvider: "deepgram",
+      transcriberModel: "nova-2",
+      transcriberLanguage: "ar-SA",
+      endpointingMs: 500,
+      summaryPrompt: "",
+      successEvaluationPrompt: "",
+      privacyEnabled: false,
+      hipaaEnabled: false,
+      voicemailDetection: true,
+      maxDuration: 1800,
+      silenceTimeout: 30,
+    },
+  };
+
+  // Load assistant data from localStorage on mount (with mock fallback)
   React.useEffect(() => {
     if (!isNew && params.id) {
       const saved = localStorage.getItem("assistants");
+      let assistant = null;
+
+      // First try localStorage
       if (saved) {
         try {
           const assistants = JSON.parse(saved);
-          const assistant = assistants[params.id as string];
-          if (assistant) {
-            setFormData(assistant);
-          }
+          assistant = assistants[params.id as string];
         } catch (e) {
-          console.error("Failed to load assistant:", e);
+          console.error("Failed to load assistant from localStorage:", e);
         }
+      }
+
+      // Fallback to mock data if not found in localStorage
+      if (!assistant && mockAssistantsData[params.id as string]) {
+        assistant = mockAssistantsData[params.id as string];
+        console.log("📋 Loaded mock assistant:", params.id);
+      }
+
+      if (assistant) {
+        // Merge with defaults to ensure all fields exist
+        setFormData(prev => ({
+          ...prev,
+          ...assistant,
+        }));
+        console.log("✅ Assistant loaded:", assistant.name);
       }
     }
   }, [isNew, params.id]);
