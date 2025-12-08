@@ -159,47 +159,80 @@ async def preview_voice(request: PreviewVoiceRequest):
 PRICING = {
     # STT Pricing (per minute)
     "stt": {
-        "deepgram": 0.0043,  # Nova-2 (default)
-        "deepgram_nova": 0.0043,  # Nova-2
+        "deepgram": 0.0043,  # Nova-2/Nova-3 (default)
+        "deepgram_nova": 0.0043,  # Nova-2/Nova-3
+        "deepgram_nova3": 0.0043,  # Nova-3 (Latest)
         "deepgram_whisper": 0.0048,  # Whisper
+        "deepgram_flux": 0.0043,  # Flux (Voice Agents)
         "azure": 0.0167,  # Azure STT - Best quality for Arabic
         "openai_whisper": 0.006,  # OpenAI Whisper
         "openai": 0.006,  # OpenAI Whisper
-        "groq": 0.006,  # Groq Whisper - FASTEST option
+        "groq": 0.0007,  # Groq Whisper - $0.04/hour = ~$0.0007/min - FASTEST & CHEAPEST!
         "munsit": 0.01,  # CNTXT Munsit - BEST Arabic STT (estimated pricing)
     },
     # LLM Pricing (per 1M tokens) - input/output
     "llm": {
         "anthropic": {
+            # Current models
             "claude-sonnet-4-20250514": {"input": 3.0, "output": 15.0},
             "claude-3-5-sonnet-20241022": {"input": 3.0, "output": 15.0},
             "claude-3-5-haiku-20241022": {"input": 0.80, "output": 4.0},
             "claude-3-opus-20240229": {"input": 15.0, "output": 75.0},
+            # 2025 models (estimated pricing based on tier)
+            "claude-opus-4": {"input": 15.0, "output": 75.0},
+            "claude-sonnet-4.5": {"input": 3.0, "output": 15.0},
+            "claude-opus-4.5": {"input": 15.0, "output": 75.0},
+            "claude-haiku-4.5": {"input": 0.80, "output": 4.0},
         },
         "openai": {
+            # Current models
             "gpt-4o": {"input": 2.5, "output": 10.0},
             "gpt-4o-mini": {"input": 0.15, "output": 0.6},
             "gpt-4-turbo": {"input": 10.0, "output": 30.0},
             "gpt-4": {"input": 30.0, "output": 60.0},
             "gpt-3.5-turbo": {"input": 0.5, "output": 1.5},
+            # 2025 models (estimated pricing based on tier)
+            "gpt-4.1": {"input": 2.5, "output": 10.0},
+            "gpt-4.1-mini": {"input": 0.15, "output": 0.6},
+            "gpt-4.1-nano": {"input": 0.10, "output": 0.4},
+            "o3": {"input": 10.0, "output": 40.0},  # Reasoning model
+            "o4-mini": {"input": 3.0, "output": 12.0},  # Reasoning model
         },
         "google": {
+            # Current models
             "gemini-2.0-flash": {"input": 0.075, "output": 0.30},
             "gemini-1.5-pro": {"input": 1.25, "output": 5.0},
             "gemini-1.5-flash": {"input": 0.075, "output": 0.30},
+            # 2025 models
+            "gemini-2.5-pro": {"input": 1.25, "output": 5.0},
+            "gemini-2.5-flash": {"input": 0.075, "output": 0.30},
+            "gemini-2.0-pro": {"input": 1.25, "output": 5.0},
+            "gemini-2.0-flash-lite": {"input": 0.04, "output": 0.15},
+            "gemini-3-pro": {"input": 1.50, "output": 6.0},
         },
         "groq": {
+            # Llama models
             "llama-3.3-70b-versatile": {"input": 0.59, "output": 0.79},
+            "llama-3.2-90b-vision-preview": {"input": 0.90, "output": 0.90},
+            "llama-3.2-11b-vision-preview": {"input": 0.18, "output": 0.18},
             "llama-3.1-70b-versatile": {"input": 0.59, "output": 0.79},
             "llama-3.1-8b-instant": {"input": 0.05, "output": 0.08},
+            # Other models
             "mixtral-8x7b-32768": {"input": 0.24, "output": 0.24},
             "gemma2-9b-it": {"input": 0.20, "output": 0.20},
         },
         "together": {
+            # Llama models
             "meta-llama/Llama-3.3-70B-Instruct-Turbo": {"input": 0.88, "output": 0.88},
             "meta-llama/Llama-3.2-11B-Vision-Instruct-Turbo": {"input": 0.18, "output": 0.18},
-            "mistralai/Mixtral-8x7B-Instruct-v0.1": {"input": 0.60, "output": 0.60},
+            # Qwen models
             "Qwen/Qwen2.5-72B-Instruct-Turbo": {"input": 1.20, "output": 1.20},
+            "Qwen/Qwen3-235B-A22B": {"input": 2.00, "output": 2.00},
+            # Mistral models
+            "mistralai/Mixtral-8x7B-Instruct-v0.1": {"input": 0.60, "output": 0.60},
+            "mistralai/Mistral-Small-24B": {"input": 0.80, "output": 0.80},
+            # DeepSeek
+            "deepseek-ai/DeepSeek-R1": {"input": 0.55, "output": 2.19},
         },
     },
     # TTS Pricing (per 1M characters)
@@ -258,8 +291,17 @@ class CostTracker:
         if self.llm_provider in PRICING["llm"] and self.llm_model in PRICING["llm"][self.llm_provider]:
             rates = PRICING["llm"][self.llm_provider][self.llm_model]
             llm_cost = (self.llm_input_tokens * rates["input"] + self.llm_output_tokens * rates["output"]) / 1_000_000
+        elif self.llm_provider in PRICING["llm"]:
+            # Use average pricing for unknown models in known provider
+            provider_rates = list(PRICING["llm"][self.llm_provider].values())
+            avg_input = sum(r["input"] for r in provider_rates) / len(provider_rates)
+            avg_output = sum(r["output"] for r in provider_rates) / len(provider_rates)
+            llm_cost = (self.llm_input_tokens * avg_input + self.llm_output_tokens * avg_output) / 1_000_000
+            logger.warning(f"⚠️ Using average pricing for unknown model: {self.llm_provider}/{self.llm_model}")
         else:
-            logger.warning(f"⚠️ LLM pricing not found for {self.llm_provider}/{self.llm_model}")
+            # Default fallback pricing
+            llm_cost = (self.llm_input_tokens * 1.0 + self.llm_output_tokens * 3.0) / 1_000_000
+            logger.warning(f"⚠️ LLM pricing not found for {self.llm_provider}/{self.llm_model}, using default")
 
         # TTS cost
         tts_cost = 0.0
