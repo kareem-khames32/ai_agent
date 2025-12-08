@@ -29,117 +29,296 @@ import {
   Maximize2,
 } from "lucide-react";
 
-// Provider options
+// ============== LLM PROVIDERS & MODELS ==============
 const modelProviders = [
-  { value: "anthropic", label: "Anthropic" },
   { value: "openai", label: "OpenAI" },
-  { value: "google", label: "Google" },
-  { value: "azure", label: "Azure OpenAI" },
-  { value: "groq", label: "Groq" },
+  { value: "anthropic", label: "Anthropic" },
+  { value: "google", label: "Google Gemini" },
+  { value: "groq", label: "Groq (Fastest!)" },
+  { value: "together", label: "Together AI (200+ models)" },
 ];
 
-const modelsByProvider: Record<string, { value: string; label: string }[]> = {
-  anthropic: [
-    { value: "claude-sonnet-4-20250514", label: "Claude Sonnet 4" },
-    { value: "claude-haiku", label: "Claude Haiku" },
-  ],
+const modelsByProvider: Record<string, { value: string; label: string; price?: string; context?: string }[]> = {
   openai: [
-    { value: "gpt-4o", label: "GPT-4o" },
-    { value: "gpt-4o-mini", label: "GPT-4o Mini" },
+    { value: "gpt-4o", label: "GPT-4o", price: "$2.50/$10 per 1M", context: "128K" },
+    { value: "gpt-4o-mini", label: "GPT-4o Mini", price: "$0.15/$0.60 per 1M", context: "128K" },
+    { value: "gpt-4-turbo", label: "GPT-4 Turbo", price: "$10/$30 per 1M", context: "128K" },
+    { value: "gpt-4", label: "GPT-4", price: "$30/$60 per 1M", context: "8K" },
+    { value: "gpt-3.5-turbo", label: "GPT-3.5 Turbo", price: "$0.50/$1.50 per 1M", context: "16K" },
+    { value: "gpt-4.1", label: "GPT-4.1 (New 2025)", price: "-", context: "-" },
+    { value: "gpt-4.1-mini", label: "GPT-4.1 Mini (New 2025)", price: "-", context: "-" },
+    { value: "gpt-4.1-nano", label: "GPT-4.1 Nano (Fastest)", price: "-", context: "1M" },
+    { value: "o3", label: "O3 (Reasoning)", price: "-", context: "-" },
+    { value: "o4-mini", label: "O4 Mini (Reasoning)", price: "-", context: "-" },
+  ],
+  anthropic: [
+    { value: "claude-sonnet-4-20250514", label: "Claude Sonnet 4", price: "$3/$15 per 1M", context: "200K" },
+    { value: "claude-3-5-sonnet-20241022", label: "Claude 3.5 Sonnet", price: "$3/$15 per 1M", context: "200K" },
+    { value: "claude-3-5-haiku-20241022", label: "Claude 3.5 Haiku (Fast)", price: "$0.80/$4 per 1M", context: "200K" },
+    { value: "claude-3-opus-20240229", label: "Claude 3 Opus", price: "$15/$75 per 1M", context: "200K" },
+    { value: "claude-opus-4", label: "Claude Opus 4 (New 2025)", price: "-", context: "200K" },
+    { value: "claude-sonnet-4.5", label: "Claude Sonnet 4.5 (Latest)", price: "-", context: "200K" },
+    { value: "claude-opus-4.5", label: "Claude Opus 4.5 (Latest)", price: "-", context: "200K" },
+    { value: "claude-haiku-4.5", label: "Claude Haiku 4.5 (Latest)", price: "-", context: "200K" },
   ],
   google: [
-    { value: "gemini-2.0-flash", label: "Gemini 2.0 Flash" },
-    { value: "gemini-pro", label: "Gemini Pro" },
-  ],
-  azure: [
-    { value: "gpt-4", label: "GPT-4" },
-    { value: "gpt-35-turbo", label: "GPT-3.5 Turbo" },
+    { value: "gemini-2.5-pro", label: "Gemini 2.5 Pro (Most Powerful)", price: "-", context: "-" },
+    { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash (Best Value)", price: "-", context: "-" },
+    { value: "gemini-2.0-flash", label: "Gemini 2.0 Flash", price: "$0.075/$0.30 per 1M", context: "1M" },
+    { value: "gemini-2.0-pro", label: "Gemini 2.0 Pro", price: "-", context: "2M" },
+    { value: "gemini-2.0-flash-lite", label: "Gemini 2.0 Flash Lite (Cheapest)", price: "-", context: "-" },
+    { value: "gemini-3-pro", label: "Gemini 3 Pro (Newest)", price: "-", context: "-" },
+    { value: "gemini-1.5-pro", label: "Gemini 1.5 Pro", price: "$1.25/$5 per 1M", context: "2M" },
+    { value: "gemini-1.5-flash", label: "Gemini 1.5 Flash", price: "$0.075/$0.30 per 1M", context: "1M" },
   ],
   groq: [
-    { value: "llama-3.3-70b", label: "Llama 3.3 70B" },
-    { value: "mixtral-8x7b", label: "Mixtral 8x7B" },
+    { value: "llama-3.3-70b-versatile", label: "Llama 3.3 70B (Best)", price: "$0.59/$0.79 per 1M", context: "128K" },
+    { value: "llama-3.2-90b-vision-preview", label: "Llama 3.2 90B Vision", price: "-", context: "-" },
+    { value: "llama-3.2-11b-vision-preview", label: "Llama 3.2 11B Vision", price: "-", context: "-" },
+    { value: "llama-3.1-8b-instant", label: "Llama 3.1 8B (Fastest)", price: "$0.05/$0.08 per 1M", context: "128K" },
+    { value: "mixtral-8x7b-32768", label: "Mixtral 8x7B", price: "$0.24/$0.24 per 1M", context: "32K" },
+    { value: "gemma2-9b-it", label: "Gemma 2 9B", price: "$0.20/$0.20 per 1M", context: "-" },
+  ],
+  together: [
+    { value: "meta-llama/Llama-3.3-70B-Instruct-Turbo", label: "Llama 3.3 70B Turbo", price: "$0.88/$0.88 per 1M", context: "-" },
+    { value: "meta-llama/Llama-3.2-11B-Vision-Instruct-Turbo", label: "Llama 3.2 11B Vision", price: "$0.18/$0.18 per 1M", context: "-" },
+    { value: "Qwen/Qwen2.5-72B-Instruct-Turbo", label: "Qwen 2.5 72B (Best for Code)", price: "$1.20/$1.20 per 1M", context: "-" },
+    { value: "Qwen/Qwen3-235B-A22B", label: "Qwen 3 235B MoE (Largest)", price: "-", context: "-" },
+    { value: "mistralai/Mixtral-8x7B-Instruct-v0.1", label: "Mixtral 8x7B", price: "$0.60/$0.60 per 1M", context: "-" },
+    { value: "mistralai/Mistral-Small-24B", label: "Mistral Small 24B", price: "-", context: "-" },
+    { value: "deepseek-ai/DeepSeek-R1", label: "DeepSeek R1 (Reasoning)", price: "-", context: "-" },
   ],
 };
 
+// ============== TTS PROVIDERS & VOICES ==============
 const voiceProviders = [
-  { value: "elevenlabs", label: "ElevenLabs (Best Quality)" },
-  { value: "azure", label: "Azure TTS (Best Arabic - Fast & Cheap)" },
-  { value: "google", label: "Google TTS" },
-  { value: "openai", label: "OpenAI TTS" },
-  { value: "deepgram", label: "Deepgram (Fastest)" },
-  { value: "cartesia", label: "Cartesia (Ultra-Low Latency)" },
-  { value: "playht", label: "PlayHT" },
+  { value: "azure", label: "Azure TTS (600+ voices - Best Arabic) - $16/1M chars" },
+  { value: "elevenlabs", label: "ElevenLabs (Best Quality) - $300/1M chars" },
+  { value: "openai", label: "OpenAI TTS - $15/1M chars" },
+  { value: "deepgram", label: "Deepgram Aura (Fastest!) - $30/1M chars" },
 ];
 
 // Voices organized by provider
 const voicesByProvider: Record<string, { value: string; label: string; gender: string; language: string }[]> = {
+  // ============== AZURE ARABIC VOICES (32 voices) ==============
   azure: [
-    { value: "ar-SA-HamedNeural", label: "Hamed (Saudi Male)", gender: "male", language: "ar-SA" },
-    { value: "ar-SA-ZariyahNeural", label: "Zariyah (Saudi Female)", gender: "female", language: "ar-SA" },
-    { value: "ar-EG-ShakirNeural", label: "Shakir (Egyptian Male)", gender: "male", language: "ar-EG" },
-    { value: "ar-EG-SalmaNeural", label: "Salma (Egyptian Female)", gender: "female", language: "ar-EG" },
-    { value: "ar-AE-FatimaNeural", label: "Fatima (UAE Female)", gender: "female", language: "ar-AE" },
-    { value: "ar-AE-HamdanNeural", label: "Hamdan (UAE Male)", gender: "male", language: "ar-AE" },
-    { value: "en-US-JennyNeural", label: "Jenny (US Female)", gender: "female", language: "en-US" },
-    { value: "en-US-GuyNeural", label: "Guy (US Male)", gender: "male", language: "en-US" },
-    { value: "en-GB-SoniaNeural", label: "Sonia (UK Female)", gender: "female", language: "en-GB" },
+    // Saudi Arabia
+    { value: "ar-SA-HamedNeural", label: "Hamed (سعودي)", gender: "male", language: "ar-SA" },
+    { value: "ar-SA-ZariyahNeural", label: "Zariyah (سعودي)", gender: "female", language: "ar-SA" },
+    // Egypt
+    { value: "ar-EG-SalmaNeural", label: "Salma (مصري)", gender: "female", language: "ar-EG" },
+    { value: "ar-EG-ShakirNeural", label: "Shakir (مصري)", gender: "male", language: "ar-EG" },
+    // UAE
+    { value: "ar-AE-FatimaNeural", label: "Fatima (إماراتي)", gender: "female", language: "ar-AE" },
+    { value: "ar-AE-HamdanNeural", label: "Hamdan (إماراتي)", gender: "male", language: "ar-AE" },
+    // Bahrain
+    { value: "ar-BH-AliNeural", label: "Ali (بحريني)", gender: "male", language: "ar-BH" },
+    { value: "ar-BH-LailaNeural", label: "Laila (بحريني)", gender: "female", language: "ar-BH" },
+    // Algeria
+    { value: "ar-DZ-AminaNeural", label: "Amina (جزائري)", gender: "female", language: "ar-DZ" },
+    { value: "ar-DZ-IsmaelNeural", label: "Ismael (جزائري)", gender: "male", language: "ar-DZ" },
+    // Iraq
+    { value: "ar-IQ-BasselNeural", label: "Bassel (عراقي)", gender: "male", language: "ar-IQ" },
+    { value: "ar-IQ-RanaNeural", label: "Rana (عراقي)", gender: "female", language: "ar-IQ" },
+    // Jordan
+    { value: "ar-JO-SanaNeural", label: "Sana (أردني)", gender: "female", language: "ar-JO" },
+    { value: "ar-JO-TaimNeural", label: "Taim (أردني)", gender: "male", language: "ar-JO" },
+    // Kuwait
+    { value: "ar-KW-FahedNeural", label: "Fahed (كويتي)", gender: "male", language: "ar-KW" },
+    { value: "ar-KW-NouraNeural", label: "Noura (كويتي)", gender: "female", language: "ar-KW" },
+    // Lebanon
+    { value: "ar-LB-LaylaNeural", label: "Layla (لبناني)", gender: "female", language: "ar-LB" },
+    { value: "ar-LB-RamiNeural", label: "Rami (لبناني)", gender: "male", language: "ar-LB" },
+    // Libya
+    { value: "ar-LY-ImanNeural", label: "Iman (ليبي)", gender: "female", language: "ar-LY" },
+    { value: "ar-LY-OmarNeural", label: "Omar (ليبي)", gender: "male", language: "ar-LY" },
+    // Morocco
+    { value: "ar-MA-JamalNeural", label: "Jamal (مغربي)", gender: "male", language: "ar-MA" },
+    { value: "ar-MA-MounaNeural", label: "Mouna (مغربي)", gender: "female", language: "ar-MA" },
+    // Oman
+    { value: "ar-OM-AbdullahNeural", label: "Abdullah (عماني)", gender: "male", language: "ar-OM" },
+    { value: "ar-OM-AyshaNeural", label: "Aysha (عماني)", gender: "female", language: "ar-OM" },
+    // Qatar
+    { value: "ar-QA-AmalNeural", label: "Amal (قطري)", gender: "female", language: "ar-QA" },
+    { value: "ar-QA-MoazNeural", label: "Moaz (قطري)", gender: "male", language: "ar-QA" },
+    // Syria
+    { value: "ar-SY-AmanyNeural", label: "Amany (سوري)", gender: "female", language: "ar-SY" },
+    { value: "ar-SY-LaithNeural", label: "Laith (سوري)", gender: "male", language: "ar-SY" },
+    // Tunisia
+    { value: "ar-TN-HediNeural", label: "Hedi (تونسي)", gender: "male", language: "ar-TN" },
+    { value: "ar-TN-ReemNeural", label: "Reem (تونسي)", gender: "female", language: "ar-TN" },
+    // Yemen
+    { value: "ar-YE-MaryamNeural", label: "Maryam (يمني)", gender: "female", language: "ar-YE" },
+    { value: "ar-YE-SalehNeural", label: "Saleh (يمني)", gender: "male", language: "ar-YE" },
+    // English voices
+    { value: "en-US-JennyNeural", label: "Jenny (US)", gender: "female", language: "en-US" },
+    { value: "en-US-GuyNeural", label: "Guy (US)", gender: "male", language: "en-US" },
+    { value: "en-GB-SoniaNeural", label: "Sonia (UK)", gender: "female", language: "en-GB" },
+    { value: "en-GB-RyanNeural", label: "Ryan (UK)", gender: "male", language: "en-GB" },
   ],
+
+  // ============== ELEVENLABS VOICES (40+ voices) ==============
   elevenlabs: [
-    { value: "EXAVITQu4vr4xnSDxMaL", label: "Sarah (Conversational)", gender: "female", language: "en-US" },
-    { value: "pNInz6obpgDQGcFmaJgB", label: "Adam (Deep & Authoritative)", gender: "male", language: "en-US" },
-    { value: "yoZ06aMxZJJ28mfd3POQ", label: "Sam (Arabic)", gender: "male", language: "ar-SA" },
-    { value: "jsCqWAovK2LkecY7zXl4", label: "Freya (Warm)", gender: "female", language: "en-US" },
-    { value: "TX3LPaxmHKxFdv7VOQHJ", label: "Liam (Articulate)", gender: "male", language: "en-US" },
+    { value: "EXAVITQu4vr4xnSDxMaL", label: "Rachel (هادئ)", gender: "female", language: "en-US" },
+    { value: "pNInz6obpgDQGcFmaJgB", label: "Adam (عميق)", gender: "male", language: "en-US" },
+    { value: "21m00Tcm4TlvDq8ikWAM", label: "Drew (واثق)", gender: "male", language: "en-US" },
+    { value: "AZnzlk1XvdvUeBnXmlld", label: "Clyde (حربي)", gender: "male", language: "en-US" },
+    { value: "CYw3kZ02Hs0563khs1Fj", label: "Paul (أخبار)", gender: "male", language: "en-US" },
+    { value: "D38z5RcWu1voky8WS1ja", label: "Domi (قوي)", gender: "female", language: "en-US" },
+    { value: "IKne3meq5aSn9XLyUdCD", label: "Dave (بريطاني)", gender: "male", language: "en-GB" },
+    { value: "MF3mGyEYCl7XYWbV9V6O", label: "Fin (إيرلندي)", gender: "male", language: "en-IE" },
+    { value: "N2lVS1w4EtoT3dr4eOWO", label: "Sarah (ناعم)", gender: "female", language: "en-US" },
+    { value: "ODq5zmih8GrVes37Dizd", label: "Antoni (معبر)", gender: "male", language: "en-US" },
+    { value: "SOYHLrjzK2X1ezoPC6cr", label: "Thomas (هادئ)", gender: "male", language: "en-US" },
+    { value: "TX3LPaxmHKxFdv7VOQHJ", label: "Liam (مقالات)", gender: "male", language: "en-US" },
+    { value: "XB0fDUnXU5powFXDhCwa", label: "Charlotte (سويدي)", gender: "female", language: "sv-SE" },
+    { value: "XrExE9yKIg1WjnnlVkGX", label: "Matilda (دافئ)", gender: "female", language: "en-US" },
+    { value: "Yko7PKs66lpKU65lgBr1", label: "Matthew (بريطاني)", gender: "male", language: "en-GB" },
+    { value: "ZQe5CZNOzWyzPSCn5a3c", label: "James (أسترالي)", gender: "male", language: "en-AU" },
+    { value: "Zlb1dXrM653N07WRdFW3", label: "Joseph (راوي)", gender: "male", language: "en-GB" },
+    { value: "bVMeCyTHy58xNoL34h3p", label: "Jeremy (محادثة)", gender: "male", language: "en-US" },
+    { value: "flq6f7yk4E4fJM5XTYuZ", label: "Michael (كبير)", gender: "male", language: "en-US" },
+    { value: "g5CIjZEefAph4nQFvHAz", label: "Ethan", gender: "male", language: "en-US" },
+    { value: "jBpfuIE2acCO8z3wKNLl", label: "Gigi (متحمس)", gender: "female", language: "en-US" },
+    { value: "jsCqWAovK2LkecY7zXl4", label: "Freya", gender: "female", language: "en-US" },
+    { value: "oWAxZDx7w5VEj9dCyTzz", label: "Grace (جنوبي)", gender: "female", language: "en-US" },
+    { value: "onwK4e9ZLuTAKqWW03F9", label: "Daniel (بريطاني عميق)", gender: "male", language: "en-GB" },
+    { value: "pFZP5JQG7iQjIQuC4Bku", label: "Serena (لطيف)", gender: "female", language: "en-US" },
+    { value: "piTKgcLEGmPE4e6mEKli", label: "Nicole (همس)", gender: "female", language: "en-US" },
+    { value: "pqHfZKP75CvOlQylNhV4", label: "Bill (راوي)", gender: "male", language: "en-US" },
+    { value: "t0jbNlBVZ17f02VDIeMI", label: "Jessie (سريع)", gender: "male", language: "en-US" },
+    { value: "wViXBPUzp2ZZixB1xQuM", label: "Sam (متحدث)", gender: "male", language: "en-US" },
+    { value: "z9fAnlkpzviPz146aGWa", label: "Glinda (ساحرة)", gender: "female", language: "en-US" },
+    { value: "zcAOhNBS3c14rBihAFp1", label: "Giovanni (إيطالي)", gender: "male", language: "it-IT" },
+    { value: "zrHiDhphv9ZnVXBqCLjz", label: "Mimi (سويدي)", gender: "female", language: "sv-SE" },
+    { value: "ThT5KcBeYPX3keUQqHPh", label: "Dorothy (بريطاني لطيف)", gender: "female", language: "en-GB" },
+    { value: "VR6AewLTigWG4xSOukaG", label: "Arnold (راوي)", gender: "male", language: "en-US" },
+    { value: "pMsXgVXv3BLzUgSXRplE", label: "Josh (عميق)", gender: "male", language: "en-US" },
+    { value: "nPczCjzI2devNBz1zQrb", label: "Charlie (أسترالي)", gender: "male", language: "en-AU" },
+    { value: "GBv7mTt0atIp3Br8iCZE", label: "Emily (هادئ)", gender: "female", language: "en-US" },
+    { value: "MF3mGyEYCl7XYWbV9V6O", label: "Elli (شاب)", gender: "female", language: "en-US" },
+    { value: "TxGEqnHWrfWFTfGW9XjX", label: "Callum (مشرق)", gender: "male", language: "en-US" },
+    { value: "iP95p4xoKVk53GoZ742B", label: "Patrick (ناضج)", gender: "male", language: "en-US" },
+    { value: "LcfcDJNUP1GQjkzn1xUU", label: "Harry (قلق)", gender: "male", language: "en-US" },
   ],
-  deepgram: [
-    { value: "aura-asteria-en", label: "Asteria (Fast & Natural)", gender: "female", language: "en-US" },
-    { value: "aura-zeus-en", label: "Zeus (Deep)", gender: "male", language: "en-US" },
-    { value: "aura-orpheus-en", label: "Orpheus (Warm)", gender: "male", language: "en-US" },
-    { value: "aura-angus-en", label: "Angus (Irish)", gender: "male", language: "en-US" },
-    { value: "aura-luna-en", label: "Luna (Soft)", gender: "female", language: "en-US" },
-  ],
+
+  // ============== OPENAI TTS VOICES ==============
   openai: [
-    { value: "alloy", label: "Alloy (Neutral)", gender: "neutral", language: "multi" },
-    { value: "echo", label: "Echo (Male)", gender: "male", language: "multi" },
-    { value: "fable", label: "Fable (British)", gender: "male", language: "multi" },
-    { value: "onyx", label: "Onyx (Deep Male)", gender: "male", language: "multi" },
-    { value: "nova", label: "Nova (Female)", gender: "female", language: "multi" },
-    { value: "shimmer", label: "Shimmer (Warm Female)", gender: "female", language: "multi" },
+    { value: "alloy", label: "Alloy (محايد)", gender: "neutral", language: "multi" },
+    { value: "echo", label: "Echo (ذكر واضح)", gender: "male", language: "multi" },
+    { value: "fable", label: "Fable (بريطاني راوي)", gender: "male", language: "multi" },
+    { value: "onyx", label: "Onyx (ذكر عميق)", gender: "male", language: "multi" },
+    { value: "nova", label: "Nova (أنثى ودود)", gender: "female", language: "multi" },
+    { value: "shimmer", label: "Shimmer (أنثى دافئ)", gender: "female", language: "multi" },
+    { value: "ash", label: "Ash (جديد)", gender: "male", language: "multi" },
+    { value: "ballad", label: "Ballad (جديد)", gender: "neutral", language: "multi" },
+    { value: "coral", label: "Coral (جديد)", gender: "female", language: "multi" },
+    { value: "sage", label: "Sage (جديد)", gender: "neutral", language: "multi" },
+    { value: "verse", label: "Verse (جديد)", gender: "neutral", language: "multi" },
   ],
-  google: [
-    { value: "ar-XA-Standard-A", label: "Arabic Standard A", gender: "female", language: "ar" },
-    { value: "ar-XA-Standard-B", label: "Arabic Standard B", gender: "male", language: "ar" },
-    { value: "ar-XA-Wavenet-A", label: "Arabic Wavenet A (Premium)", gender: "female", language: "ar" },
-    { value: "en-US-Neural2-A", label: "US Neural2 A", gender: "female", language: "en-US" },
-    { value: "en-US-Neural2-D", label: "US Neural2 D", gender: "male", language: "en-US" },
-  ],
-  cartesia: [
-    { value: "sonic-english", label: "Sonic English", gender: "male", language: "en-US" },
-    { value: "sonic-multilingual", label: "Sonic Multilingual", gender: "male", language: "multi" },
-  ],
-  playht: [
-    { value: "s3://peregrine-voices/oliver_narrative", label: "Oliver (Narrative)", gender: "male", language: "en-US" },
-    { value: "s3://peregrine-voices/susan_calm", label: "Susan (Calm)", gender: "female", language: "en-US" },
+
+  // ============== DEEPGRAM AURA VOICES (40+ voices) ==============
+  deepgram: [
+    // English - American Female
+    { value: "aura-asteria-en", label: "Asteria (Default)", gender: "female", language: "en-US" },
+    { value: "aura-luna-en", label: "Luna (ناعم)", gender: "female", language: "en-US" },
+    { value: "aura-stella-en", label: "Stella", gender: "female", language: "en-US" },
+    { value: "aura-hera-en", label: "Hera", gender: "female", language: "en-US" },
+    // English - American Male
+    { value: "aura-orion-en", label: "Orion", gender: "male", language: "en-US" },
+    { value: "aura-arcas-en", label: "Arcas", gender: "male", language: "en-US" },
+    { value: "aura-perseus-en", label: "Perseus", gender: "male", language: "en-US" },
+    { value: "aura-orpheus-en", label: "Orpheus (دافئ)", gender: "male", language: "en-US" },
+    { value: "aura-zeus-en", label: "Zeus (عميق)", gender: "male", language: "en-US" },
+    // English - British
+    { value: "aura-athena-en", label: "Athena (بريطاني)", gender: "female", language: "en-GB" },
+    { value: "aura-helios-en", label: "Helios (بريطاني)", gender: "male", language: "en-GB" },
+    // English - Irish
+    { value: "aura-angus-en", label: "Angus (إيرلندي)", gender: "male", language: "en-IE" },
+    // Aura 2 voices
+    { value: "aura-2-thalia-en", label: "Thalia (Aura 2)", gender: "female", language: "en-US" },
   ],
 };
 
+// ============== STT PROVIDERS & MODELS ==============
 const transcriberProviders = [
-  { value: "deepgram", label: "Deepgram" },
-  { value: "azure", label: "Azure Speech" },
-  { value: "google", label: "Google Speech" },
-  { value: "assemblyai", label: "AssemblyAI" },
-  { value: "openai", label: "OpenAI Whisper" },
+  { value: "deepgram", label: "Deepgram (Best for English) - $4.30/1K min" },
+  { value: "groq", label: "Groq Whisper (Fastest!) - $0.04/hour" },
+  { value: "openai", label: "OpenAI Whisper - $0.006/min" },
+  { value: "azure", label: "Azure Speech - $16.67/1K min" },
+  { value: "munsit", label: "Munsit (Best for Arabic!) 🇸🇦" },
 ];
 
+// STT Models by provider
+const sttModelsByProvider: Record<string, { value: string; label: string; price?: string }[]> = {
+  deepgram: [
+    { value: "nova-3", label: "Nova-3 (Latest - 53% more accurate)", price: "$4.30/1K min" },
+    { value: "nova-2", label: "Nova-2 (Best for English)", price: "$4.30/1K min" },
+    { value: "nova-2-meeting", label: "Nova-2 Meeting (للاجتماعات)", price: "$4.30/1K min" },
+    { value: "nova-2-phonecall", label: "Nova-2 Phone Call (للمكالمات)", price: "$4.30/1K min" },
+    { value: "nova-2-voicemail", label: "Nova-2 Voicemail (للرسائل)", price: "$4.30/1K min" },
+    { value: "nova-2-finance", label: "Nova-2 Finance (للمالية)", price: "$4.30/1K min" },
+    { value: "nova-2-conversationalai", label: "Nova-2 ConversationalAI (للوكلاء)", price: "$4.30/1K min" },
+    { value: "nova", label: "Nova (الجيل الأول)", price: "$4.00/1K min" },
+    { value: "whisper-large", label: "Whisper Large (للعربية)", price: "$4.80/1K min" },
+    { value: "whisper-medium", label: "Whisper Medium", price: "$4.80/1K min" },
+    { value: "whisper-small", label: "Whisper Small (سريع)", price: "$4.80/1K min" },
+    { value: "whisper-tiny", label: "Whisper Tiny (الأسرع)", price: "$4.80/1K min" },
+    { value: "flux", label: "Flux (Voice Agents - New!)", price: "-" },
+  ],
+  groq: [
+    { value: "whisper-large-v3", label: "Whisper Large V3 (الأدق)", price: "Free tier" },
+    { value: "whisper-large-v3-turbo", label: "Whisper Large V3 Turbo (216x faster!)", price: "$0.04/hour" },
+  ],
+  openai: [
+    { value: "whisper-1", label: "Whisper-1 (Standard)", price: "$0.006/min" },
+    { value: "gpt-4o-transcribe", label: "GPT-4o Transcribe (New 2025 - Most Accurate)", price: "-" },
+    { value: "gpt-4o-mini-transcribe", label: "GPT-4o Mini Transcribe (Faster & Cheaper)", price: "-" },
+  ],
+  azure: [
+    { value: "default", label: "Universal Language Model", price: "$16.67/1K min" },
+    { value: "custom", label: "Custom Speech (Domain-specific)", price: "-" },
+    { value: "whisper", label: "Azure Whisper", price: "-" },
+  ],
+  munsit: [
+    { value: "munsit-1", label: "Munsit-1 (Best Arabic STT in the World!)", price: "Contact for pricing" },
+  ],
+};
+
 const languages = [
-  { value: "ar-SA", label: "Arabic (Saudi)" },
-  { value: "ar-EG", label: "Arabic (Egypt)" },
-  { value: "ar-AE", label: "Arabic (UAE)" },
+  // Arabic dialects
+  { value: "ar-SA", label: "العربية (سعودي)" },
+  { value: "ar-EG", label: "العربية (مصري)" },
+  { value: "ar-AE", label: "العربية (إماراتي)" },
+  { value: "ar-BH", label: "العربية (بحريني)" },
+  { value: "ar-DZ", label: "العربية (جزائري)" },
+  { value: "ar-IQ", label: "العربية (عراقي)" },
+  { value: "ar-JO", label: "العربية (أردني)" },
+  { value: "ar-KW", label: "العربية (كويتي)" },
+  { value: "ar-LB", label: "العربية (لبناني)" },
+  { value: "ar-LY", label: "العربية (ليبي)" },
+  { value: "ar-MA", label: "العربية (مغربي)" },
+  { value: "ar-OM", label: "العربية (عماني)" },
+  { value: "ar-PS", label: "العربية (فلسطيني)" },
+  { value: "ar-QA", label: "العربية (قطري)" },
+  { value: "ar-SY", label: "العربية (سوري)" },
+  { value: "ar-TN", label: "العربية (تونسي)" },
+  { value: "ar-YE", label: "العربية (يمني)" },
+  // English
   { value: "en-US", label: "English (US)" },
   { value: "en-GB", label: "English (UK)" },
-  { value: "fr-FR", label: "French" },
-  { value: "de-DE", label: "German" },
-  { value: "es-ES", label: "Spanish" },
+  { value: "en-AU", label: "English (Australia)" },
+  // Other languages
+  { value: "fr-FR", label: "Français" },
+  { value: "de-DE", label: "Deutsch" },
+  { value: "es-ES", label: "Español" },
+  { value: "it-IT", label: "Italiano" },
+  { value: "pt-BR", label: "Português (Brasil)" },
+  { value: "ja-JP", label: "日本語" },
+  { value: "ko-KR", label: "한국어" },
+  { value: "zh-CN", label: "中文 (简体)" },
+  { value: "hi-IN", label: "हिन्दी" },
+  { value: "tr-TR", label: "Türkçe" },
 ];
 
 const firstMessageModes = [
@@ -273,6 +452,7 @@ export default function AssistantEditorPage() {
     voiceSpeed: 1.0,
     voicePitch: 1.0,
     transcriberProvider: "deepgram",
+    transcriberModel: "nova-2",
     transcriberLanguage: "ar-SA",
     endpointingMs: 500,
     summaryPrompt: "",
@@ -338,6 +518,7 @@ export default function AssistantEditorPage() {
         voiceId: formData.voiceId,
         voiceSpeed: formData.voiceSpeed,
         transcriberProvider: formData.transcriberProvider,
+        transcriberModel: formData.transcriberModel,
         transcriberLanguage: formData.transcriberLanguage,
       }));
 
@@ -442,8 +623,24 @@ export default function AssistantEditorPage() {
                   <Select
                     value={formData.modelName}
                     onChange={(v) => updateFormData("modelName", v)}
-                    options={modelsByProvider[formData.modelProvider] || []}
+                    options={(modelsByProvider[formData.modelProvider] || []).map(m => ({
+                      value: m.value,
+                      label: m.label,
+                    }))}
                   />
+                  {/* Show model price & context */}
+                  {(() => {
+                    const selectedModel = (modelsByProvider[formData.modelProvider] || []).find(m => m.value === formData.modelName);
+                    if (selectedModel) {
+                      return (
+                        <div className="flex gap-2 mt-2 flex-wrap">
+                          {selectedModel.price && <Badge variant="outline">💰 {selectedModel.price}</Badge>}
+                          {selectedModel.context && <Badge variant="outline">📄 {selectedModel.context}</Badge>}
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
                 </div>
 
                 <Slider
@@ -643,9 +840,40 @@ export default function AssistantEditorPage() {
                   <label className="text-sm font-medium">Provider</label>
                   <Select
                     value={formData.transcriberProvider}
-                    onChange={(v) => updateFormData("transcriberProvider", v)}
+                    onChange={(v) => {
+                      updateFormData("transcriberProvider", v);
+                      // Auto-select first model for this provider
+                      const models = sttModelsByProvider[v] || [];
+                      if (models.length > 0) {
+                        updateFormData("transcriberModel", models[0].value);
+                      }
+                    }}
                     options={transcriberProviders}
                   />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Model</label>
+                  <Select
+                    value={formData.transcriberModel || (sttModelsByProvider[formData.transcriberProvider]?.[0]?.value || "")}
+                    onChange={(v) => updateFormData("transcriberModel", v)}
+                    options={(sttModelsByProvider[formData.transcriberProvider] || []).map(m => ({
+                      value: m.value,
+                      label: m.label,
+                    }))}
+                  />
+                  {/* Show model price */}
+                  {(() => {
+                    const selectedModel = (sttModelsByProvider[formData.transcriberProvider] || []).find(m => m.value === formData.transcriberModel);
+                    if (selectedModel?.price) {
+                      return (
+                        <div className="flex gap-2 mt-2">
+                          <Badge variant="outline">{selectedModel.price}</Badge>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
                 </div>
 
                 <div className="space-y-2">
