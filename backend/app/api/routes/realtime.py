@@ -252,6 +252,7 @@ class CostTracker:
     def __init__(self):
         self.stt_minutes = 0.0
         self.stt_provider = ""
+        self.stt_model = ""  # Track specific model for accurate pricing
         self.llm_input_tokens = 0
         self.llm_output_tokens = 0
         self.llm_provider = ""
@@ -259,10 +260,12 @@ class CostTracker:
         self.tts_characters = 0
         self.tts_provider = ""
 
-    def add_stt(self, audio_duration_seconds: float, provider: str):
+    def add_stt(self, audio_duration_seconds: float, provider: str, model: str = ""):
         """Add STT usage"""
         self.stt_minutes += audio_duration_seconds / 60.0
         self.stt_provider = provider
+        if model:
+            self.stt_model = model
 
     def add_llm(self, input_tokens: int, output_tokens: int, provider: str, model: str):
         """Add LLM usage"""
@@ -278,12 +281,25 @@ class CostTracker:
 
     def calculate_cost(self) -> dict:
         """Calculate total cost"""
-        logger.info(f"💵 Calculating cost: STT={self.stt_minutes:.2f}min/{self.stt_provider}, LLM={self.llm_input_tokens}+{self.llm_output_tokens} tokens/{self.llm_provider}/{self.llm_model}, TTS={self.tts_characters} chars/{self.tts_provider}")
+        logger.info(f"💵 Calculating cost: STT={self.stt_minutes:.2f}min/{self.stt_provider}/{self.stt_model}, LLM={self.llm_input_tokens}+{self.llm_output_tokens} tokens/{self.llm_provider}/{self.llm_model}, TTS={self.tts_characters} chars/{self.tts_provider}")
 
-        # STT cost
-        stt_key = f"{self.stt_provider}_whisper" if "whisper" in self.stt_provider.lower() else self.stt_provider
+        # STT cost - determine pricing key based on provider and model
+        stt_key = self.stt_provider
+        if self.stt_model:
+            # Use model-specific pricing if available
+            if "whisper" in self.stt_model.lower():
+                stt_key = f"{self.stt_provider}_whisper"
+            elif "nova-3" in self.stt_model.lower() or "nova3" in self.stt_model.lower():
+                stt_key = f"{self.stt_provider}_nova3"
+            elif "flux" in self.stt_model.lower():
+                stt_key = f"{self.stt_provider}_flux"
+        elif "whisper" in self.stt_provider.lower():
+            stt_key = f"{self.stt_provider}"
+
         if stt_key not in PRICING["stt"]:
-            stt_key = "deepgram_whisper"  # default
+            stt_key = self.stt_provider  # fallback to provider
+        if stt_key not in PRICING["stt"]:
+            stt_key = "deepgram"  # ultimate fallback
         stt_cost = self.stt_minutes * PRICING["stt"].get(stt_key, 0.005)
 
         # LLM cost
@@ -679,9 +695,10 @@ class RealtimeVoiceSession:
                 # Add to conversation
                 self.messages.append(Message(role="user", content=transcript))
 
-                # Track STT cost
+                # Track STT cost with model for accurate pricing
                 audio_duration = len(self.audio_buffer) / (16000 * 2) if self.audio_buffer else 1.0
-                self.cost_tracker.add_stt(audio_duration, self.stt_provider)
+                stt_model = self._get_stt_model()
+                self.cost_tracker.add_stt(audio_duration, self.stt_provider, stt_model)
                 self.audio_buffer = b""  # Clear
 
                 # Generate response
@@ -961,13 +978,16 @@ class RealtimeVoiceSession:
                     "role": "assistant",
                     "text": text_to_save,
                 })
-                self.messages.append(Message(role="assistant", content=text_to_save))
 
-                # Track costs (only for what was actually spoken)
-                input_tokens = sum(len(m.content) for m in self.messages) // 4
+                # Track costs BEFORE adding to messages (to avoid counting output as input)
+                # Input = system prompt + all messages so far (not including this response)
+                input_tokens = len(self.system_prompt) // 4 + sum(len(m.content) for m in self.messages) // 4
                 output_tokens = len(text_to_save) // 4
                 self.cost_tracker.add_llm(input_tokens, output_tokens, self.llm_provider, self.llm_model)
                 self.cost_tracker.add_tts(len(text_to_save), self.tts_provider)
+
+                # NOW add to conversation history
+                self.messages.append(Message(role="assistant", content=text_to_save))
 
         except Exception as e:
             logger.error(f"Pipeline error: {e}")
@@ -1201,6 +1221,22 @@ class RealtimeVoiceSession:
                     "message": f"❌ خطأ: {str(e)[:100]}",
                 })
 
+    def _get_stt_model(self) -> str:
+        """Get the actual STT model being used based on provider and language"""
+        is_arabic = self.language.lower().startswith("ar")
+
+        if self.stt_provider == "deepgram":
+            return "whisper-large" if is_arabic else "nova-2"
+        elif self.stt_provider == "groq":
+            return "whisper-large-v3-turbo"
+        elif self.stt_provider == "openai":
+            return "whisper-1"
+        elif self.stt_provider == "azure":
+            return "default"
+        elif self.stt_provider == "munsit":
+            return "munsit-1"
+        return "unknown"
+
     async def transcribe_audio(self, audio_data: bytes) -> str:
         """Transcribe audio using configured STT provider"""
         # Calculate audio duration (16-bit PCM at 16kHz)
@@ -1221,8 +1257,9 @@ class RealtimeVoiceSession:
                 # Default to Deepgram
                 transcript = await self._transcribe_deepgram(audio_data)
 
-            # Track STT cost
-            self.cost_tracker.add_stt(audio_duration, self.stt_provider)
+            # Track STT cost with model for accurate pricing
+            stt_model = self._get_stt_model()
+            self.cost_tracker.add_stt(audio_duration, self.stt_provider, stt_model)
 
             return transcript
 
