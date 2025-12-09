@@ -124,32 +124,38 @@ class LLMService:
         max_tokens: int = 1024,
         temperature: float = 0.7,
     ) -> AsyncGenerator[str, None]:
-        """Stream response from the LLM"""
+        """Stream response from the LLM with proper cleanup on early termination"""
+        inner_gen = None
         try:
             if self.provider == "anthropic":
-                async for chunk in self._anthropic_stream(messages, system_prompt, max_tokens, temperature):
-                    yield chunk
+                inner_gen = self._anthropic_stream(messages, system_prompt, max_tokens, temperature)
             elif self.provider == "openai":
-                async for chunk in self._openai_stream(messages, system_prompt, max_tokens, temperature):
-                    yield chunk
+                inner_gen = self._openai_stream(messages, system_prompt, max_tokens, temperature)
             elif self.provider == "google":
-                async for chunk in self._google_stream(messages, system_prompt, max_tokens, temperature):
-                    yield chunk
+                inner_gen = self._google_stream(messages, system_prompt, max_tokens, temperature)
             elif self.provider == "groq":
-                async for chunk in self._groq_stream(messages, system_prompt, max_tokens, temperature):
-                    yield chunk
+                inner_gen = self._groq_stream(messages, system_prompt, max_tokens, temperature)
             elif self.provider == "together":
-                async for chunk in self._together_stream(messages, system_prompt, max_tokens, temperature):
-                    yield chunk
+                inner_gen = self._together_stream(messages, system_prompt, max_tokens, temperature)
             else:
                 raise ValueError(f"Unknown LLM provider: {self.provider}")
+
+            async for chunk in inner_gen:
+                yield chunk
         except GeneratorExit:
             # Handle early termination gracefully (e.g., when user interrupts)
             logger.debug("LLM stream terminated early")
-            return
         except Exception as e:
             logger.error(f"LLM stream error: {e}")
             raise
+        finally:
+            # CRITICAL: Properly close the inner generator to prevent
+            # "async generator ignored GeneratorExit" errors
+            if inner_gen is not None:
+                try:
+                    await inner_gen.aclose()
+                except Exception:
+                    pass  # Ignore errors during cleanup
 
     async def _anthropic_generate(
         self,
