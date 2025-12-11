@@ -162,7 +162,7 @@ export default function LiveCallPage() {
   const callSavedRef = React.useRef(false); // Track if call was already saved
 
   // 🔊 Audio Queue for gapless playback
-  const audioQueueRef = React.useRef<string[]>([]);
+  const audioQueueRef = React.useRef<{url: string, sequence: number}[]>([]);
   const isPlayingRef = React.useRef(false);
   const audioInterruptedRef = React.useRef(false);  // Flag to block audio after interrupt
   const isAISpeakingRef = React.useRef(false);  // Track AI speaking for barge-in
@@ -265,7 +265,7 @@ export default function LiveCallPage() {
   React.useEffect(() => {
     return () => {
       // Clear audio queue on unmount
-      audioQueueRef.current.forEach(url => URL.revokeObjectURL(url));
+      audioQueueRef.current.forEach(item => URL.revokeObjectURL(item.url));
       audioQueueRef.current = [];
       if (audioRef.current) {
         audioRef.current.pause();
@@ -731,7 +731,7 @@ export default function LiveCallPage() {
               // Reset for next turn
               speechEndTimeRef.current = null;
             }
-            playAudio(message.data);
+            playAudio(message.data, message.sequence || 0);
             break;
 
           case "interrupted":
@@ -1068,15 +1068,24 @@ export default function LiveCallPage() {
       return;
     }
 
-    const url = audioQueueRef.current.shift()!;
+    const item = audioQueueRef.current.shift()!;
     isPlayingRef.current = true;
     setIsAISpeaking(true);
 
-    const audio = new Audio(url);
+    // 🎯 Tell backend this audio chunk is NOW playing (for accurate history)
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: "audio_playing",
+        sequence: item.sequence,
+      }));
+      console.log(`▶️ Playing audio sequence ${item.sequence}`);
+    }
+
+    const audio = new Audio(item.url);
     audioRef.current = audio;
 
     audio.onended = () => {
-      URL.revokeObjectURL(url);
+      URL.revokeObjectURL(item.url);
       // Play next in queue (if not interrupted)
       if (!audioInterruptedRef.current) {
         playNextFromQueue();
@@ -1084,7 +1093,7 @@ export default function LiveCallPage() {
     };
 
     audio.onerror = () => {
-      URL.revokeObjectURL(url);
+      URL.revokeObjectURL(item.url);
       console.error("Audio playback error");
       // Try next in queue (if not interrupted)
       if (!audioInterruptedRef.current) {
@@ -1101,7 +1110,7 @@ export default function LiveCallPage() {
   };
 
   // 🔊 Queue audio for gapless playback
-  const playAudio = (base64Audio: string) => {
+  const playAudio = (base64Audio: string, sequence: number = 0) => {
     // Check if interrupted - don't queue new audio
     if (audioInterruptedRef.current) {
       console.log("🚫 Audio blocked - user interrupted");
@@ -1118,9 +1127,9 @@ export default function LiveCallPage() {
       const blob = new Blob([byteArray], { type: 'audio/mpeg' });
       const url = URL.createObjectURL(blob);
 
-      // Add to queue
-      audioQueueRef.current.push(url);
-      console.log(`🔊 Audio queued. Queue size: ${audioQueueRef.current.length}`);
+      // Add to queue with sequence number
+      audioQueueRef.current.push({ url, sequence });
+      console.log(`🔊 Audio queued (seq ${sequence}). Queue size: ${audioQueueRef.current.length}`);
 
       // Start playing if not already playing
       if (!isPlayingRef.current) {
@@ -1149,7 +1158,7 @@ export default function LiveCallPage() {
     }
 
     // Revoke all URLs in queue
-    audioQueueRef.current.forEach(url => URL.revokeObjectURL(url));
+    audioQueueRef.current.forEach(item => URL.revokeObjectURL(item.url));
     audioQueueRef.current = [];
     isPlayingRef.current = false;
     setIsAISpeaking(false);

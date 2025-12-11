@@ -478,6 +478,10 @@ class RealtimeVoiceSession:
         self.is_thinking: bool = False  # AI is processing (LLM) but not speaking yet
         self.should_restart_thinking: bool = False  # Signal to restart with new input
 
+        # 🎯 Track which audio was ACTUALLY played (not just sent)
+        self.played_sequences: set[int] = set()  # Sequences confirmed played by frontend
+        self.sequence_to_text: dict[int, str] = {}  # Map sequence number to text
+
     async def init_streaming_stt(self):
         """Initialize streaming STT connection"""
         if self.stt_provider == "deepgram" and self.stt_api_key:
@@ -562,6 +566,28 @@ class RealtimeVoiceSession:
             "together": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
         }
         return defaults.get(provider, "llama-3.3-70b-versatile")
+
+    def mark_sequence_played(self, sequence: int):
+        """Mark an audio sequence as actually played by frontend"""
+        self.played_sequences.add(sequence)
+
+    def get_played_text(self) -> str:
+        """Get the text that was actually played (based on confirmed sequences)"""
+        if not self.played_sequences or not self.sequence_to_text:
+            return ""
+
+        # Get text for all played sequences in order
+        played_texts = []
+        for seq in sorted(self.played_sequences):
+            if seq in self.sequence_to_text:
+                played_texts.append(self.sequence_to_text[seq])
+
+        return " ".join(played_texts).strip()
+
+    def reset_sequence_tracking(self):
+        """Reset sequence tracking for new response"""
+        self.played_sequences.clear()
+        self.sequence_to_text.clear()
 
     async def add_audio_chunk(self, audio_data: bytes):
         """Send audio chunk to streaming STT (real-time transcription)"""
@@ -862,11 +888,14 @@ class RealtimeVoiceSession:
         # Don't set is_speaking yet - wait until TTS actually starts
         self.should_stop_speaking = False
 
+        # 🎯 Reset sequence tracking for this new response
+        self.reset_sequence_tracking()
+
         # Sentence queue for ordered TTS
         sentence_queue: asyncio.Queue[str | None] = asyncio.Queue()
         tts_done = asyncio.Event()
         first_audio_sent = False
-        spoken_sentences: list[str] = []  # Track sentences that were actually spoken
+        spoken_sentences: list[str] = []  # Track sentences that were sent (backup)
 
         async def tts_worker():
             """Process TTS in order"""
@@ -911,9 +940,11 @@ class RealtimeVoiceSession:
                             "data": audio_b64,
                             "sequence": seq,
                         })
-                        # 🎯 Track this sentence as SPOKEN (audio was sent to frontend)
+                        # 🎯 Map sequence to text for tracking what was ACTUALLY played
+                        self.sequence_to_text[seq] = text.strip()
+                        # Also track in backup list (for fallback)
                         spoken_sentences.append(text.strip())
-                        logger.info(f"✅ Sentence spoken: '{text[:30]}...'")
+                        logger.info(f"✅ Sentence sent seq={seq}: '{text[:30]}...'")
 
                     # Record AI audio in BACKGROUND (doesn't block playback)
                     if self.recording_enabled and text.strip():
@@ -1033,9 +1064,19 @@ class RealtimeVoiceSession:
                         await sentence_queue.put(to_send)
                         logger.info(f"📤 Forced send: '{to_send[:40]}...'")
 
-            # 🔄 If aborted (full stop), save what was spoken
+            # 🔄 If aborted (full stop), save what was ACTUALLY played
             if should_abort:
-                spoken_text = " ".join(spoken_sentences).strip()
+                # Wait a bit for frontend to send audio_playing confirmations
+                await asyncio.sleep(0.3)
+
+                # 🎯 Get text that was ACTUALLY played (confirmed by frontend)
+                actually_played = self.get_played_text()
+                sent_text = " ".join(spoken_sentences).strip()
+
+                logger.info(f"🎯 Abort tracking: played={len(self.played_sequences)} seqs, sent={len(spoken_sentences)} sentences")
+
+                # Use actually_played if available, otherwise fall back to sent_text
+                spoken_text = actually_played if actually_played else sent_text
 
                 # Send final text stream (interrupted)
                 await self.client_ws.send_json({
@@ -1045,7 +1086,7 @@ class RealtimeVoiceSession:
                     "interrupted": True,
                 })
 
-                # Save spoken text to history
+                # Save ONLY what was ACTUALLY PLAYED to history
                 if spoken_text:
                     await self.client_ws.send_json({
                         "type": "transcript",
@@ -1055,6 +1096,8 @@ class RealtimeVoiceSession:
                     })
                     self.messages.append(Message(role="assistant", content=spoken_text))
                     logger.info(f"💾 Saved (abort): '{spoken_text[:50]}...'")
+                else:
+                    logger.info(f"💾 Nothing played yet - not saving to history")
 
                 await sentence_queue.put(None)
                 tts_task.cancel()
@@ -1062,7 +1105,20 @@ class RealtimeVoiceSession:
 
             # 🎯 If TTS was stopped (audio_only_stop), LLM completed but audio didn't
             if tts_stopped:
-                spoken_text = " ".join(spoken_sentences).strip()
+                # Wait a bit for frontend to send audio_playing confirmations
+                await asyncio.sleep(0.3)
+
+                # 🎯 Get text that was ACTUALLY played (confirmed by frontend)
+                actually_played = self.get_played_text()
+                # Fallback to sent sentences if no confirmations received yet
+                sent_text = " ".join(spoken_sentences).strip()
+
+                logger.info(f"🎯 Audio tracking: played={len(self.played_sequences)} seqs, sent={len(spoken_sentences)} sentences")
+                logger.info(f"   Actually played: '{actually_played[:50] if actually_played else '(none)'}...'")
+                logger.info(f"   Sent (backup): '{sent_text[:50] if sent_text else '(none)'}...'")
+
+                # Use actually_played if available, otherwise fall back to sent_text
+                spoken_text = actually_played if actually_played else sent_text
 
                 # Send final text stream - show full response (user can read what AI was going to say)
                 await self.client_ws.send_json({
@@ -1072,23 +1128,25 @@ class RealtimeVoiceSession:
                     "interrupted": True,  # Mark as interrupted since audio stopped
                 })
 
-                # Save SPOKEN text to history (what was actually said, not full response)
-                text_to_save = spoken_text if spoken_text else full_response.strip()
+                # Save ONLY what was ACTUALLY PLAYED to history
+                text_to_save = spoken_text if spoken_text else ""
                 if text_to_save:
                     await self.client_ws.send_json({
                         "type": "transcript",
                         "role": "assistant",
                         "text": text_to_save,
-                        "partial": bool(spoken_text),
+                        "partial": True,  # Always partial since interrupted
                     })
                     self.messages.append(Message(role="assistant", content=text_to_save))
-                    logger.info(f"💾 Saved (audio stop): spoken='{spoken_text[:30]}...' full='{full_response[:30]}...'")
+                    logger.info(f"💾 Saved (audio stop): '{text_to_save[:50]}...' (full was: '{full_response[:30]}...')")
+                else:
+                    logger.info(f"💾 Nothing played yet - not saving to history")
 
                 # Track costs
                 input_tokens = len(self.system_prompt) // 4 + sum(len(m.content) for m in self.messages) // 4
-                output_tokens = len(text_to_save) // 4
+                output_tokens = len(text_to_save) // 4 if text_to_save else 0
                 self.cost_tracker.add_llm(input_tokens, output_tokens, self.llm_provider, self.llm_model)
-                self.cost_tracker.add_tts(len(spoken_text) if spoken_text else 0, self.tts_provider)
+                self.cost_tracker.add_tts(len(text_to_save) if text_to_save else 0, self.tts_provider)
 
                 tts_task.cancel()
                 return
@@ -2173,6 +2231,13 @@ async def realtime_voice_websocket(
 
                     # Don't clear audio_buffer - let the restart logic handle the new audio
                     logger.info("✅ Barge-in signal sent - process_transcript will restart")
+
+                elif msg_type == "audio_playing" and session:
+                    # 🎯 Frontend is NOW playing this audio chunk
+                    # This tells us what was ACTUALLY played (not just sent)
+                    sequence = data.get("sequence", 0)
+                    session.mark_sequence_played(sequence)
+                    logger.debug(f"▶️ Audio sequence {sequence} confirmed playing")
 
                 elif msg_type == "end":
                     logger.info(f"🔚 Session {session_id} ended by client")
