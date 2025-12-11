@@ -126,23 +126,27 @@ class LLMService:
         temperature: float = 0.7,
     ) -> AsyncGenerator[str, None]:
         """Stream response from the LLM"""
-        if self.provider == "anthropic":
-            async for chunk in self._anthropic_stream(messages, system_prompt, max_tokens, temperature):
-                yield chunk
-        elif self.provider == "openai":
-            async for chunk in self._openai_stream(messages, system_prompt, max_tokens, temperature):
-                yield chunk
-        elif self.provider == "google":
-            async for chunk in self._google_stream(messages, system_prompt, max_tokens, temperature):
-                yield chunk
-        elif self.provider == "groq":
-            async for chunk in self._groq_stream(messages, system_prompt, max_tokens, temperature):
-                yield chunk
-        elif self.provider == "together":
-            async for chunk in self._together_stream(messages, system_prompt, max_tokens, temperature):
-                yield chunk
-        else:
-            raise ValueError(f"Unknown LLM provider: {self.provider}")
+        try:
+            if self.provider == "anthropic":
+                async for chunk in self._anthropic_stream(messages, system_prompt, max_tokens, temperature):
+                    yield chunk
+            elif self.provider == "openai":
+                async for chunk in self._openai_stream(messages, system_prompt, max_tokens, temperature):
+                    yield chunk
+            elif self.provider == "google":
+                async for chunk in self._google_stream(messages, system_prompt, max_tokens, temperature):
+                    yield chunk
+            elif self.provider == "groq":
+                async for chunk in self._groq_stream(messages, system_prompt, max_tokens, temperature):
+                    yield chunk
+            elif self.provider == "together":
+                async for chunk in self._together_stream(messages, system_prompt, max_tokens, temperature):
+                    yield chunk
+            else:
+                raise ValueError(f"Unknown LLM provider: {self.provider}")
+        except GeneratorExit:
+            logger.debug("generate_stream: closed by caller")
+            return
 
     async def _anthropic_generate(
         self,
