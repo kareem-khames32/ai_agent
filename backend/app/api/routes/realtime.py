@@ -511,10 +511,13 @@ class RealtimeVoiceSession:
     async def _on_transcript(self, result: TranscriptResult):
         """Handle transcript from streaming STT - BUFFER ONLY, don't process yet"""
         try:
+            # 🔍 Debug: Always log transcript info
+            word_count = len(result.text.strip().split()) if result.text.strip() else 0
+            logger.info(f"📝 Transcript: '{result.text[:40]}...' | words={word_count} | is_final={result.is_final} | threshold={self.interruption_words_threshold}")
+
             # 🎯 Word-threshold based interruption
             # Count words and trigger interruption when threshold is reached
             if self.interruption_enabled and self.interruption_words_threshold > 0:
-                word_count = len(result.text.strip().split())
                 self.interrupt_word_count = max(self.interrupt_word_count, word_count)
 
                 # Debug log

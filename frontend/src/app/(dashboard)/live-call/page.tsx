@@ -636,6 +636,13 @@ export default function LiveCallPage() {
             stop_on_hangup: assistant?.stopOnHangup ?? true,
           },
         }));
+
+        // 🔍 Debug: Log interruption settings being sent
+        console.log("⚙️ Interruption config sent:", {
+          enabled: assistant?.interruptionEnabled ?? true,
+          wordsThreshold: assistant?.interruptionWordsThreshold ?? 0,
+          fromAssistant: assistant?.name || "default",
+        });
       };
 
       ws.onmessage = async (event) => {
