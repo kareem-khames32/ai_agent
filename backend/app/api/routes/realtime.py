@@ -674,14 +674,13 @@ class RealtimeVoiceSession:
                 if self.should_restart_thinking:
                     logger.info("🔄 [process_transcript] Restart requested - waiting for new transcript...")
 
-                    # Wait a bit for new transcript to arrive from STT
-                    # User might still be speaking, give STT time to transcribe
-                    for _ in range(10):  # Wait up to 2 seconds
-                        await asyncio.sleep(0.2)
+                    # Wait briefly for new transcript (keep it fast!)
+                    for _ in range(5):  # Wait up to 0.5 seconds max
+                        await asyncio.sleep(0.1)
                         if self.current_transcript.strip():
                             break
-                        # Also check if user is still speaking
-                        if not self.user_is_speaking and time.time() - self.last_transcript_time > 0.5:
+                        # User stopped speaking? Don't wait more
+                        if not self.user_is_speaking and time.time() - self.last_transcript_time > 0.3:
                             break
 
                     new_input = self.current_transcript.strip()
@@ -785,12 +784,12 @@ class RealtimeVoiceSession:
                     if self.should_restart_thinking:
                         logger.info("🔄 [process_audio] Restart requested - waiting for new transcript...")
 
-                        # Wait for new transcript
-                        for _ in range(10):
-                            await asyncio.sleep(0.2)
+                        # Wait briefly for new transcript (keep it fast!)
+                        for _ in range(5):  # Wait up to 0.5 seconds max
+                            await asyncio.sleep(0.1)
                             if self.current_transcript.strip():
                                 break
-                            if not self.user_is_speaking and time.time() - self.last_transcript_time > 0.5:
+                            if not self.user_is_speaking and time.time() - self.last_transcript_time > 0.3:
                                 break
 
                         new_input = self.current_transcript.strip()
@@ -1017,17 +1016,31 @@ class RealtimeVoiceSession:
                         await sentence_queue.put(to_send)
                         logger.info(f"📤 Forced send: '{to_send[:40]}...'")
 
-            # 🔄 If we aborted, don't send any response
+            # 🔄 If we aborted, SAVE what was spoken so AI knows what it said
             if should_abort:
-                logger.info("🔄 Stream completed (aborted) - will restart with new input")
-                await sentence_queue.put(None)  # Stop TTS worker
-                try:
-                    tts_task.cancel()
-                    await asyncio.sleep(0.1)  # Give task time to cancel
-                except:
-                    pass
-                logger.info("🔄 Returning to restart loop...")
-                return  # Exit without sending response - restart loop will handle
+                spoken_text = " ".join(spoken_sentences).strip()
+                logger.info(f"🔄 Aborted - spoken so far: '{spoken_text[:80]}...' ({len(spoken_sentences)} sentences)")
+
+                # 🎯 CRITICAL: Save partial response to history so AI knows what it said!
+                if spoken_text:
+                    # Send partial transcript to frontend
+                    await self.client_ws.send_json({
+                        "type": "transcript",
+                        "role": "assistant",
+                        "text": spoken_text,
+                        "partial": True,  # Mark as interrupted
+                    })
+
+                    # Add to conversation history - AI will see what it said
+                    self.messages.append(Message(role="assistant", content=spoken_text))
+                    logger.info(f"💾 Saved partial response to history: '{spoken_text[:50]}...'")
+
+                # Stop TTS worker
+                await sentence_queue.put(None)
+                tts_task.cancel()
+
+                logger.info("🔄 Returning to restart loop with context preserved...")
+                return  # Exit - restart loop will handle
 
             # Send remaining text
             if sentence_buffer.strip():
