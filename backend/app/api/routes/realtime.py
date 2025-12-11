@@ -956,6 +956,8 @@ class RealtimeVoiceSession:
             )
 
             should_abort = False
+            last_text_update = ""  # Track what we sent to frontend
+
             async for token in llm_stream:
                 # Check if we should stop - but DON'T break, just skip processing
                 if self.should_stop_speaking:
@@ -983,7 +985,17 @@ class RealtimeVoiceSession:
                 full_response += token
                 sentence_buffer += token
 
-                # Only send COMPLETE sentences
+                # 📝 LIVE TEXT STREAMING - Send text to frontend as it generates (like VAPI)
+                # Send update every ~10 chars or on sentence endings
+                if len(full_response) - len(last_text_update) >= 10 or any(token.endswith(e) for e in SENTENCE_ENDINGS):
+                    await self.client_ws.send_json({
+                        "type": "text_stream",
+                        "text": full_response,
+                        "final": False,
+                    })
+                    last_text_update = full_response
+
+                # Only send COMPLETE sentences to TTS
                 if len(sentence_buffer) >= MIN_CHARS:
                     # Find the last sentence ending
                     last_end_pos = -1
@@ -1021,19 +1033,25 @@ class RealtimeVoiceSession:
                 spoken_text = " ".join(spoken_sentences).strip()
                 logger.info(f"🔄 Aborted - spoken so far: '{spoken_text[:80]}...' ({len(spoken_sentences)} sentences)")
 
-                # 🎯 CRITICAL: Save partial response to history so AI knows what it said!
+                # Send final text stream update (what was generated when interrupted)
+                await self.client_ws.send_json({
+                    "type": "text_stream",
+                    "text": full_response,
+                    "final": True,
+                    "interrupted": True,
+                })
+
+                # 🎯 CRITICAL: Save what was SPOKEN to history (not full_response!)
+                # This is what the user actually heard
                 if spoken_text:
-                    # Send partial transcript to frontend
                     await self.client_ws.send_json({
                         "type": "transcript",
                         "role": "assistant",
                         "text": spoken_text,
-                        "partial": True,  # Mark as interrupted
+                        "partial": True,
                     })
-
-                    # Add to conversation history - AI will see what it said
                     self.messages.append(Message(role="assistant", content=spoken_text))
-                    logger.info(f"💾 Saved partial response to history: '{spoken_text[:50]}...'")
+                    logger.info(f"💾 Saved spoken text to history: '{spoken_text[:50]}...'")
 
                 # Stop TTS worker
                 await sentence_queue.put(None)
@@ -1054,6 +1072,14 @@ class RealtimeVoiceSession:
             total_ms = int((time.time() - llm_start) * 1000)
             logger.info(f"✅ Total: {total_ms}ms, {token_count} tokens")
 
+            # Send final text stream (complete)
+            await self.client_ws.send_json({
+                "type": "text_stream",
+                "text": full_response,
+                "final": True,
+                "interrupted": False,
+            })
+
             # 🎯 Determine what to save: spoken_text (if interrupted) or full_response
             spoken_text = " ".join(spoken_sentences).strip()
             was_interrupted = self.should_stop_speaking or len(spoken_sentences) < len(full_response.split('.'))
@@ -1066,7 +1092,7 @@ class RealtimeVoiceSession:
             else:
                 logger.info(f"✅ Complete response: '{text_to_save[:50]}...'")
 
-            # Send transcript
+            # Send transcript (for history display)
             if text_to_save:
                 await self.client_ws.send_json({
                     "type": "transcript",

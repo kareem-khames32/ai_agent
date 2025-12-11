@@ -132,6 +132,7 @@ export default function LiveCallPage() {
   // Transcript
   const [transcript, setTranscript] = React.useState<TranscriptEntry[]>([]);
   const [interimText, setInterimText] = React.useState("");
+  const [streamingText, setStreamingText] = React.useState("");  // Live AI text as it generates
   const transcriptRef = React.useRef<TranscriptEntry[]>([]);
 
   // Call tracking
@@ -683,6 +684,7 @@ export default function LiveCallPage() {
 
           case "thinking":
             setIsThinking(true);
+            setStreamingText("");  // Clear previous streaming text
             // Reset interrupted flag - AI is starting new response
             audioInterruptedRef.current = false;
             break;
@@ -692,6 +694,15 @@ export default function LiveCallPage() {
             setIsAISpeaking(true);
             // Reset interrupted flag - AI is speaking
             audioInterruptedRef.current = false;
+            break;
+
+          case "text_stream":
+            // 📝 Live text streaming - shows AI response as it generates (like VAPI)
+            setStreamingText(message.text);
+            if (message.final) {
+              // When final, clear streaming text (transcript will have the final version)
+              setStreamingText("");
+            }
             break;
 
           case "audio":
@@ -1422,7 +1433,7 @@ export default function LiveCallPage() {
                 </div>
               ))}
 
-              {/* Interim transcript */}
+              {/* Interim transcript (user speaking) */}
               {interimText && (
                 <div className="flex justify-end">
                   <div className="max-w-[80%] p-3 rounded-lg bg-blue-400 text-white opacity-70">
@@ -1432,7 +1443,21 @@ export default function LiveCallPage() {
                 </div>
               )}
 
-              {isThinking && (
+              {/* 📝 Live streaming text - AI response building up in real-time (like VAPI) */}
+              {streamingText && (
+                <div className="flex justify-start">
+                  <div className="max-w-[80%] p-3 rounded-lg bg-gray-100 border border-gray-300 text-gray-900">
+                    <div className="text-xs opacity-70 mb-1 flex items-center gap-2">
+                      المساعد
+                      <span className="inline-block w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                    </div>
+                    <div dir="rtl">{streamingText}</div>
+                  </div>
+                </div>
+              )}
+
+              {/* Thinking indicator (only show if no streaming text yet) */}
+              {isThinking && !streamingText && (
                 <div className="flex justify-start">
                   <div className="p-3 rounded-lg bg-white border">
                     <Loader2 className="h-5 w-5 animate-spin" />
