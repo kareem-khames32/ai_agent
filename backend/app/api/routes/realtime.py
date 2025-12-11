@@ -740,7 +740,7 @@ class RealtimeVoiceSession:
         finally:
             self.is_processing = False
             self.is_thinking = False
-            self.should_restart_thinking = False  # Clean up restart flag
+            # DON'T reset should_restart_thinking here - the loop handles it
             total_time = int((time.time() - process_start) * 1000)
             logger.info(f"⏱️ Total turn time: {total_time}ms")
 
@@ -964,8 +964,13 @@ class RealtimeVoiceSession:
             if should_abort:
                 logger.info("🔄 Stream completed (aborted) - will restart with new input")
                 await sentence_queue.put(None)  # Stop TTS worker
-                tts_task.cancel()
-                return  # Exit without sending response
+                try:
+                    tts_task.cancel()
+                    await asyncio.sleep(0.1)  # Give task time to cancel
+                except:
+                    pass
+                logger.info("🔄 Returning to restart loop...")
+                return  # Exit without sending response - restart loop will handle
 
             # Send remaining text
             if sentence_buffer.strip():
