@@ -4,6 +4,7 @@ Supports: Anthropic Claude, OpenAI GPT, Google Gemini, Groq, Together AI
 With connection pooling for low latency and retry logic for rate limiting
 """
 import asyncio
+from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any, AsyncGenerator
 from dataclasses import dataclass
 import httpx
@@ -238,19 +239,19 @@ class LLMService:
         if not anthropic_messages:
             logger.error("❌ No messages to send to Anthropic!")
 
-        # Use shared client for connection reuse
-        client = get_http_client("https://api.anthropic.com")
-        async with client.stream(
-            "POST",
-            url,
-            headers=headers,
-            json=payload,
-            timeout=60.0,
-        ) as response:
+        client = None
+        response = None
+        try:
+            client = httpx.AsyncClient(timeout=60.0)
+            response = await client.send(
+                client.build_request("POST", url, headers=headers, json=payload),
+                stream=True,
+            )
             if response.status_code != 200:
                 error_text = await response.aread()
                 logger.error(f"❌ Anthropic API error: {response.status_code} - {error_text.decode()}")
             response.raise_for_status()
+
             async for line in response.aiter_lines():
                 if line.startswith("data: "):
                     try:
@@ -260,6 +261,13 @@ class LLMService:
                             yield data["delta"].get("text", "")
                     except:
                         continue
+        except GeneratorExit:
+            logger.debug("Anthropic stream: generator closed by caller")
+        finally:
+            if response:
+                await response.aclose()
+            if client:
+                await client.aclose()
 
     async def _openai_generate(
         self,
@@ -342,25 +350,35 @@ class LLMService:
             "stream": True,
         }
 
-        async with httpx.AsyncClient() as client:
-            async with client.stream(
-                "POST",
-                url,
-                headers=headers,
-                json=payload,
-                timeout=60.0,
-            ) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if line.startswith("data: ") and line != "data: [DONE]":
-                        try:
-                            import json
-                            data = json.loads(line[6:])
-                            delta = data["choices"][0].get("delta", {})
-                            if "content" in delta:
-                                yield delta["content"]
-                        except:
-                            continue
+        client = None
+        response = None
+        try:
+            client = httpx.AsyncClient(timeout=60.0)
+            response = await client.send(
+                client.build_request("POST", url, headers=headers, json=payload),
+                stream=True,
+            )
+            response.raise_for_status()
+
+            async for line in response.aiter_lines():
+                if line.startswith("data: ") and line != "data: [DONE]":
+                    try:
+                        import json
+                        data = json.loads(line[6:])
+                        delta = data["choices"][0].get("delta", {})
+                        if "content" in delta:
+                            yield delta["content"]
+                    except:
+                        continue
+        except GeneratorExit:
+            # Generator was closed by caller - this is normal when breaking from loop
+            logger.debug("OpenAI stream: generator closed by caller")
+        finally:
+            # Proper cleanup in finally block
+            if response:
+                await response.aclose()
+            if client:
+                await client.aclose()
 
     async def _google_generate(
         self,
@@ -487,30 +505,32 @@ class LLMService:
         # Retry loop for rate limiting
         last_error = None
         for attempt in range(MAX_RETRIES):
+            client = None
+            response = None
             try:
-                async with httpx.AsyncClient() as client:
-                    async with client.stream(
-                        "POST",
-                        url,
-                        headers=headers,
-                        params=params,
-                        json=payload,
-                        timeout=60.0,
-                    ) as response:
-                        response.raise_for_status()
-                        async for line in response.aiter_lines():
-                            if line.startswith("data: "):
-                                try:
-                                    import json
-                                    data = json.loads(line[6:])
-                                    if "candidates" in data:
-                                        parts = data["candidates"][0].get("content", {}).get("parts", [])
-                                        for part in parts:
-                                            if "text" in part:
-                                                yield part["text"]
-                                except:
-                                    continue
-                        return  # Success, exit retry loop
+                client = httpx.AsyncClient(timeout=60.0)
+                response = await client.send(
+                    client.build_request("POST", url, headers=headers, params=params, json=payload),
+                    stream=True,
+                )
+                response.raise_for_status()
+
+                async for line in response.aiter_lines():
+                    if line.startswith("data: "):
+                        try:
+                            import json
+                            data = json.loads(line[6:])
+                            if "candidates" in data:
+                                parts = data["candidates"][0].get("content", {}).get("parts", [])
+                                for part in parts:
+                                    if "text" in part:
+                                        yield part["text"]
+                        except:
+                            continue
+                return  # Success, exit retry loop
+            except GeneratorExit:
+                logger.debug("Google stream: generator closed by caller")
+                return
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 429:
                     last_error = e
@@ -523,6 +543,11 @@ class LLMService:
                         raise
                 else:
                     raise
+            finally:
+                if response:
+                    await response.aclose()
+                if client:
+                    await client.aclose()
 
     # ============== Groq (OpenAI-compatible) ==============
 
@@ -607,16 +632,16 @@ class LLMService:
             "stream": True,
         }
 
-        # Use shared client for connection reuse (Groq is ultra-fast!)
-        client = get_http_client("https://api.groq.com")
-        async with client.stream(
-            "POST",
-            url,
-            headers=headers,
-            json=payload,
-            timeout=60.0,
-        ) as response:
+        client = None
+        response = None
+        try:
+            client = httpx.AsyncClient(timeout=60.0)
+            response = await client.send(
+                client.build_request("POST", url, headers=headers, json=payload),
+                stream=True,
+            )
             response.raise_for_status()
+
             async for line in response.aiter_lines():
                 if line.startswith("data: ") and line != "data: [DONE]":
                     try:
@@ -627,6 +652,13 @@ class LLMService:
                             yield delta["content"]
                     except:
                         continue
+        except GeneratorExit:
+            logger.debug("Groq stream: generator closed by caller")
+        finally:
+            if response:
+                await response.aclose()
+            if client:
+                await client.aclose()
 
     # ============== Together AI (OpenAI-compatible) ==============
 
@@ -711,22 +743,30 @@ class LLMService:
             "stream": True,
         }
 
-        async with httpx.AsyncClient() as client:
-            async with client.stream(
-                "POST",
-                url,
-                headers=headers,
-                json=payload,
-                timeout=60.0,
-            ) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if line.startswith("data: ") and line != "data: [DONE]":
-                        try:
-                            import json
-                            data = json.loads(line[6:])
-                            delta = data["choices"][0].get("delta", {})
-                            if "content" in delta:
-                                yield delta["content"]
-                        except:
-                            continue
+        client = None
+        response = None
+        try:
+            client = httpx.AsyncClient(timeout=60.0)
+            response = await client.send(
+                client.build_request("POST", url, headers=headers, json=payload),
+                stream=True,
+            )
+            response.raise_for_status()
+
+            async for line in response.aiter_lines():
+                if line.startswith("data: ") and line != "data: [DONE]":
+                    try:
+                        import json
+                        data = json.loads(line[6:])
+                        delta = data["choices"][0].get("delta", {})
+                        if "content" in delta:
+                            yield delta["content"]
+                    except:
+                        continue
+        except GeneratorExit:
+            logger.debug("Together stream: generator closed by caller")
+        finally:
+            if response:
+                await response.aclose()
+            if client:
+                await client.aclose()
