@@ -1051,6 +1051,7 @@ class RealtimeVoiceSession:
                 })
             raise
         finally:
+            logger.debug(f"🔚 _process_streaming_response finally block: should_restart_thinking={self.should_restart_thinking}")
             self.is_speaking = False
             self.is_thinking = False
             self.should_stop_speaking = False  # Reset for next turn
