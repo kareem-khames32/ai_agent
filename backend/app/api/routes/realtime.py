@@ -631,9 +631,9 @@ class RealtimeVoiceSession:
                 if not transcript:
                     # For batch STT (Azure, etc.) - wait for silence before processing
                     if len(self.audio_buffer) > self.min_audio_length and not self.is_processing:
-                        # Wait for user to stop speaking (no audio for 1 second)
+                        # Wait for user to stop speaking
                         time_since_last_audio = time.time() - self.last_audio_time
-                        if time_since_last_audio > 1.0:  # 1 second of silence
+                        if time_since_last_audio > 1.2:  # Same as streaming timeout
                             await self.process_audio()
                     continue
 
@@ -642,8 +642,12 @@ class RealtimeVoiceSession:
                     continue
 
                 # If AI is processing or speaking, handle accordingly
-                if self.is_speaking:
-                    # Just wait - barge-in handles interruption
+                if self.is_speaking or self.is_processing:
+                    # AI is busy - but user has new input!
+                    # Signal that we have more to say (will be combined)
+                    if not self.should_restart_thinking:
+                        logger.info(f"🔄 User added more while AI busy: '{transcript[:50]}...'")
+                        self.should_restart_thinking = True
                     continue
 
                 if self.is_thinking:
@@ -654,12 +658,12 @@ class RealtimeVoiceSession:
 
                 # Check if audio is still being received (more reliable than VAD)
                 time_since_last_audio = time.time() - self.last_audio_time
-                if time_since_last_audio < 0.8:  # Audio still coming = user speaking
+                if time_since_last_audio < 1.2:  # Increased from 0.8 - wait longer for user
                     continue
 
                 # Also check transcript timing
                 time_since_last_transcript = time.time() - self.last_transcript_time
-                if time_since_last_transcript < 0.5:  # Recent transcript = wait more
+                if time_since_last_transcript < 0.8:  # Increased from 0.5 - wait for more speech
                     continue
 
                 # User truly stopped - process the complete message!
