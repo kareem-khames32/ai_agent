@@ -879,11 +879,12 @@ class RealtimeVoiceSession:
         spoken_text = ""  # 🎯 Track ONLY what was actually sent as audio
         token_count = 0
         sentence_buffer = ""
+        last_stream_time = 0  # For throttling text_stream
 
         # Sentence endings - Arabic and English
         SENTENCE_ENDINGS = ('.', '!', '?', '؟', '。')
-        MIN_CHARS = 15  # Minimum before checking for sentence end
-        MAX_WAIT_CHARS = 200  # Force send if no sentence ending found
+        MIN_CHARS = 10  # Reduced for faster TTS start
+        MAX_WAIT_CHARS = 150  # Force send if no sentence ending found
 
         # Don't set is_speaking yet - wait until TTS actually starts
         self.should_stop_speaking = False
@@ -1016,16 +1017,17 @@ class RealtimeVoiceSession:
                 full_response += token
                 sentence_buffer += token
 
-                # 📝 LIVE TEXT STREAMING - Send EVERY token for smooth character-by-character display (like VAPI)
-                # Continue streaming text even if TTS stopped (user can see what AI was going to say)
-                if token:
+                # 📝 LIVE TEXT STREAMING - Throttled for performance (every 30ms)
+                now = time.time()
+                if token and (now - last_stream_time) >= 0.03:  # 30ms throttle
                     await self.client_ws.send_json({
                         "type": "text_stream",
-                        "delta": token,  # New: send only the new characters
-                        "text": full_response,  # Full text for sync
+                        "delta": full_response[len(last_text_update):],  # All new chars since last update
+                        "text": full_response,
                         "final": False,
                     })
                     last_text_update = full_response
+                    last_stream_time = now
 
                 # Skip TTS if stopped (but we already built the response above)
                 if tts_stopped:
@@ -1066,17 +1068,9 @@ class RealtimeVoiceSession:
 
             # 🔄 If aborted (full stop), save what was ACTUALLY played
             if should_abort:
-                # Wait a bit for frontend to send audio_playing confirmations
-                await asyncio.sleep(0.3)
-
-                # 🎯 Get text that was ACTUALLY played (confirmed by frontend)
+                # 🎯 Use played sequences if available, otherwise fall back to sent
                 actually_played = self.get_played_text()
-                sent_text = " ".join(spoken_sentences).strip()
-
-                logger.info(f"🎯 Abort tracking: played={len(self.played_sequences)} seqs, sent={len(spoken_sentences)} sentences")
-
-                # Use actually_played if available, otherwise fall back to sent_text
-                spoken_text = actually_played if actually_played else sent_text
+                spoken_text = actually_played if actually_played else " ".join(spoken_sentences).strip()
 
                 # Send final text stream (interrupted)
                 await self.client_ws.send_json({
@@ -1086,7 +1080,7 @@ class RealtimeVoiceSession:
                     "interrupted": True,
                 })
 
-                # Save ONLY what was ACTUALLY PLAYED to history
+                # Save to history
                 if spoken_text:
                     await self.client_ws.send_json({
                         "type": "transcript",
@@ -1095,9 +1089,6 @@ class RealtimeVoiceSession:
                         "partial": True,
                     })
                     self.messages.append(Message(role="assistant", content=spoken_text))
-                    logger.info(f"💾 Saved (abort): '{spoken_text[:50]}...'")
-                else:
-                    logger.info(f"💾 Nothing played yet - not saving to history")
 
                 await sentence_queue.put(None)
                 tts_task.cancel()
@@ -1105,48 +1096,33 @@ class RealtimeVoiceSession:
 
             # 🎯 If TTS was stopped (audio_only_stop), LLM completed but audio didn't
             if tts_stopped:
-                # Wait a bit for frontend to send audio_playing confirmations
-                await asyncio.sleep(0.3)
-
-                # 🎯 Get text that was ACTUALLY played (confirmed by frontend)
+                # 🎯 Use played sequences if available, otherwise fall back to sent
                 actually_played = self.get_played_text()
-                # Fallback to sent sentences if no confirmations received yet
-                sent_text = " ".join(spoken_sentences).strip()
+                spoken_text = actually_played if actually_played else " ".join(spoken_sentences).strip()
 
-                logger.info(f"🎯 Audio tracking: played={len(self.played_sequences)} seqs, sent={len(spoken_sentences)} sentences")
-                logger.info(f"   Actually played: '{actually_played[:50] if actually_played else '(none)'}...'")
-                logger.info(f"   Sent (backup): '{sent_text[:50] if sent_text else '(none)'}...'")
-
-                # Use actually_played if available, otherwise fall back to sent_text
-                spoken_text = actually_played if actually_played else sent_text
-
-                # Send final text stream - show full response (user can read what AI was going to say)
+                # Send final text stream
                 await self.client_ws.send_json({
                     "type": "text_stream",
                     "text": full_response,
                     "final": True,
-                    "interrupted": True,  # Mark as interrupted since audio stopped
+                    "interrupted": True,
                 })
 
-                # Save ONLY what was ACTUALLY PLAYED to history
-                text_to_save = spoken_text if spoken_text else ""
-                if text_to_save:
+                # Save to history
+                if spoken_text:
                     await self.client_ws.send_json({
                         "type": "transcript",
                         "role": "assistant",
-                        "text": text_to_save,
-                        "partial": True,  # Always partial since interrupted
+                        "text": spoken_text,
+                        "partial": True,
                     })
-                    self.messages.append(Message(role="assistant", content=text_to_save))
-                    logger.info(f"💾 Saved (audio stop): '{text_to_save[:50]}...' (full was: '{full_response[:30]}...')")
-                else:
-                    logger.info(f"💾 Nothing played yet - not saving to history")
+                    self.messages.append(Message(role="assistant", content=spoken_text))
 
-                # Track costs
-                input_tokens = len(self.system_prompt) // 4 + sum(len(m.content) for m in self.messages) // 4
-                output_tokens = len(text_to_save) // 4 if text_to_save else 0
-                self.cost_tracker.add_llm(input_tokens, output_tokens, self.llm_provider, self.llm_model)
-                self.cost_tracker.add_tts(len(text_to_save) if text_to_save else 0, self.tts_provider)
+                    # Track costs
+                    input_tokens = len(self.system_prompt) // 4 + sum(len(m.content) for m in self.messages) // 4
+                    output_tokens = len(spoken_text) // 4
+                    self.cost_tracker.add_llm(input_tokens, output_tokens, self.llm_provider, self.llm_model)
+                    self.cost_tracker.add_tts(len(spoken_text), self.tts_provider)
 
                 tts_task.cancel()
                 return
