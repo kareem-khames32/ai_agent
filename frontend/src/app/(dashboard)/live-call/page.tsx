@@ -697,8 +697,14 @@ export default function LiveCallPage() {
             break;
 
           case "text_stream":
-            // 📝 Live text streaming - shows AI response as it generates (like VAPI)
-            setStreamingText(message.text);
+            // 📝 Live text streaming - shows AI response character by character (like VAPI)
+            if (message.delta) {
+              // Append new characters for smooth typewriter effect
+              setStreamingText(prev => prev + message.delta);
+            } else {
+              // Fallback to full text if no delta
+              setStreamingText(message.text);
+            }
             if (message.final) {
               // When final, clear streaming text (transcript will have the final version)
               setStreamingText("");
