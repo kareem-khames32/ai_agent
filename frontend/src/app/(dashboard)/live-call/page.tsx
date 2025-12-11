@@ -659,6 +659,21 @@ export default function LiveCallPage() {
               timestamp: new Date(),
             };
             setTranscript(prev => {
+              // 🎯 If replace flag is true, replace the last user message instead of adding
+              if (message.replace && message.role === "user") {
+                // Find and replace the last user message
+                const newTranscript = [...prev];
+                for (let i = newTranscript.length - 1; i >= 0; i--) {
+                  if (newTranscript[i].role === "user") {
+                    console.log(`🔄 Replacing user message: "${newTranscript[i].text.substring(0, 30)}..." with "${message.text.substring(0, 30)}..."`);
+                    newTranscript[i] = newEntry;
+                    transcriptRef.current = newTranscript;
+                    return newTranscript;
+                  }
+                }
+                // No user message found, just add it
+                console.log(`➕ No user message to replace, adding new: "${message.text.substring(0, 30)}..."`);
+              }
               const newTranscript = [...prev, newEntry];
               transcriptRef.current = newTranscript; // Update ref directly
               return newTranscript;

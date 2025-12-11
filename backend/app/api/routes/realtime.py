@@ -669,14 +669,17 @@ class RealtimeVoiceSession:
                 time_since_last_transcript = time.time() - self.last_transcript_time
 
                 if self.utterance_complete:
-                    # Deepgram says utterance is complete - just wait a short time for any stragglers
-                    if time_since_last_transcript < 0.3:  # Short wait after speech_final
+                    # Deepgram says utterance is complete - but wait a bit more
+                    # in case user continues speaking (they might pause mid-sentence)
+                    if time_since_last_transcript < 0.5:  # Wait 0.5s after speech_final
+                        continue
+                    if time_since_last_audio < 0.5:  # Also check audio
                         continue
                 else:
                     # No speech_final yet - use longer timeouts as fallback
                     if time_since_last_audio < 1.5:  # Wait for audio to stop
                         continue
-                    if time_since_last_transcript < 1.0:  # Wait for transcript to settle
+                    if time_since_last_transcript < 1.2:  # Wait for transcript to settle
                         continue
 
                 # User truly stopped - process the complete message!
@@ -742,16 +745,27 @@ class RealtimeVoiceSession:
                         self.current_transcript = ""
                         transcript = f"{transcript} {new_input}"
                         logger.info(f"🔄 Combined input: '{transcript[:60]}...'")
-                        if self.messages and self.messages[-1].role == "user":
-                            self.messages.pop()
                     else:
                         logger.info(f"🔄 Restarting with: '{transcript[:60]}...'")
-                        if self.messages and self.messages[-1].role == "user":
+
+                    # 🎯 Remove BOTH the partial assistant response AND the old user message
+                    # to start fresh with the combined transcript
+                    while self.messages:
+                        last_msg = self.messages[-1]
+                        if last_msg.role == "assistant":
+                            logger.info(f"🗑️ Removing partial assistant response: '{last_msg.content[:30]}...'")
                             self.messages.pop()
+                        elif last_msg.role == "user":
+                            logger.info(f"🗑️ Removing old user message: '{last_msg.content[:30]}...'")
+                            self.messages.pop()
+                            break  # Stop after removing the user message
+                        else:
+                            break
 
                     self.should_restart_thinking = False
                     self.is_thinking = True
                     self.should_stop_speaking = False
+                    self._is_restart_iteration = True  # Flag to replace user message on frontend
 
                 # Calculate STT latency
                 stt_latency = int((time.time() - self.speech_start_time) * 1000) if self.speech_start_time else 0
@@ -759,12 +773,14 @@ class RealtimeVoiceSession:
 
                 await self.client_ws.send_json({"type": "processing"})
 
-                # Send user transcript
+                # Send user transcript (with replace flag if this is a restart)
                 await self.client_ws.send_json({
                     "type": "transcript",
                     "role": "user",
                     "text": transcript,
+                    "replace": getattr(self, '_is_restart_iteration', False),  # Replace last user msg if restarting
                 })
+                self._is_restart_iteration = False  # Reset flag
 
                 # Add to conversation
                 self.messages.append(Message(role="user", content=transcript))
@@ -1084,29 +1100,40 @@ class RealtimeVoiceSession:
                         await sentence_queue.put(to_send)
                         logger.info(f"📤 Forced send: '{to_send[:40]}...'")
 
-            # 🔄 If aborted (full stop), save what was ACTUALLY played
+            # 🔄 If aborted (full stop), handle based on WHY we aborted
             if should_abort:
                 # 🎯 Use played sequences if available, otherwise fall back to sent
                 actually_played = self.get_played_text()
                 spoken_text = actually_played if actually_played else " ".join(spoken_sentences).strip()
 
-                # Send final text stream (interrupted)
-                await self.client_ws.send_json({
-                    "type": "text_stream",
-                    "text": full_response,
-                    "final": True,
-                    "interrupted": True,
-                })
-
-                # Save to history
-                if spoken_text:
+                # If we're restarting (user added more input), DON'T save partial response
+                # The restart loop will handle everything fresh
+                if self.should_restart_thinking:
+                    logger.info(f"🔄 Aborting for restart - NOT saving partial response")
+                    # Clear streaming text on frontend
                     await self.client_ws.send_json({
-                        "type": "transcript",
-                        "role": "assistant",
-                        "text": spoken_text,
-                        "partial": True,
+                        "type": "text_stream",
+                        "text": "",
+                        "final": True,
+                        "interrupted": True,
                     })
-                    self.messages.append(Message(role="assistant", content=spoken_text))
+                    # DON'T save to messages - restart loop will handle it
+                else:
+                    # Normal abort (interruption) - save what was spoken
+                    await self.client_ws.send_json({
+                        "type": "text_stream",
+                        "text": full_response,
+                        "final": True,
+                        "interrupted": True,
+                    })
+                    if spoken_text:
+                        await self.client_ws.send_json({
+                            "type": "transcript",
+                            "role": "assistant",
+                            "text": spoken_text,
+                            "partial": True,
+                        })
+                        self.messages.append(Message(role="assistant", content=spoken_text))
 
                 await sentence_queue.put(None)
                 tts_task.cancel()
