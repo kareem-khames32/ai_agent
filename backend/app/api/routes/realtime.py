@@ -746,6 +746,7 @@ class RealtimeVoiceSession:
             await self.client_ws.send_json({"type": "error", "message": str(e)})
 
         finally:
+            logger.debug(f"🔚 process_transcript finally block reached")
             self.is_processing = False
             self.is_thinking = False
             # DON'T reset should_restart_thinking here - the loop handles it
