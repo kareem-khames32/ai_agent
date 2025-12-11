@@ -933,13 +933,11 @@ class RealtimeVoiceSession:
                         await sentence_queue.put(to_send)
                         logger.info(f"📤 Forced send: '{to_send[:40]}...'")
 
-            # 🔧 Explicitly close the stream if we broke out early
-            if should_close_stream and llm_stream is not None:
-                try:
-                    await llm_stream.aclose()
-                    logger.debug("✅ LLM stream closed explicitly")
-                except Exception as e:
-                    logger.debug(f"Stream close: {e}")
+            # 🔧 Don't explicitly close - let Python GC handle it
+            # Calling aclose() on nested async generators causes RuntimeError
+            if should_close_stream:
+                logger.debug("🔄 Stream will be garbage collected")
+                llm_stream = None  # Release reference
 
             # 🔄 If restarting, don't send any response
             if self.should_restart_thinking and not self.is_speaking:
