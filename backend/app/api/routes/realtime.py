@@ -899,19 +899,25 @@ class RealtimeVoiceSession:
                 temperature=self.llm_temperature,
             )
 
-            should_close_stream = False
+            should_abort = False
             async for token in llm_stream:
+                # Check if we should stop - but DON'T break, just skip processing
                 if self.should_stop_speaking:
-                    logger.info("🛑 should_stop_speaking detected - breaking LLM loop")
-                    should_close_stream = True
-                    break
+                    if not should_abort:
+                        logger.info("🛑 should_stop_speaking detected - skipping remaining tokens")
+                        should_abort = True
+                    continue  # Skip this token but keep consuming
 
                 # 🔄 Check if user added more input while we're thinking
-                # Only restart if we haven't started speaking yet
                 if self.should_restart_thinking and not self.is_speaking:
-                    logger.info("🔄 should_restart_thinking detected (not speaking) - will restart")
-                    should_close_stream = True
-                    break
+                    if not should_abort:
+                        logger.info("🔄 should_restart_thinking detected - skipping remaining tokens")
+                        should_abort = True
+                    continue  # Skip this token but keep consuming
+
+                # If aborting, just consume without processing
+                if should_abort:
+                    continue
 
                 token_count += 1
                 if first_token_time is None:
@@ -954,15 +960,9 @@ class RealtimeVoiceSession:
                         await sentence_queue.put(to_send)
                         logger.info(f"📤 Forced send: '{to_send[:40]}...'")
 
-            # 🔧 Don't explicitly close - let Python GC handle it
-            # Calling aclose() on nested async generators causes RuntimeError
-            if should_close_stream:
-                logger.debug("🔄 Stream will be garbage collected")
-                llm_stream = None  # Release reference
-
-            # 🔄 If restarting, don't send any response
-            if self.should_restart_thinking and not self.is_speaking:
-                logger.info("🔄 Aborting response - will restart with new input")
+            # 🔄 If we aborted, don't send any response
+            if should_abort:
+                logger.info("🔄 Stream completed (aborted) - will restart with new input")
                 await sentence_queue.put(None)  # Stop TTS worker
                 tts_task.cancel()
                 return  # Exit without sending response
