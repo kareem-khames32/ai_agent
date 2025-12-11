@@ -517,6 +517,9 @@ class RealtimeVoiceSession:
                 word_count = len(result.text.strip().split())
                 self.interrupt_word_count = max(self.interrupt_word_count, word_count)
 
+                # Debug log
+                logger.info(f"🔢 Words: {self.interrupt_word_count}/{self.interruption_words_threshold} | speaking={self.is_speaking} | thinking={self.is_thinking} | stopped={self.should_stop_speaking}")
+
                 # Check if we've reached the threshold and haven't interrupted yet
                 if (self.interrupt_word_count >= self.interruption_words_threshold and
                     (self.is_speaking or self.is_thinking) and
@@ -535,6 +538,9 @@ class RealtimeVoiceSession:
                         self.should_restart_thinking = True
                         logger.info(f"🛑 Word-threshold ({self.interrupt_word_count}/{self.interruption_words_threshold}) reached: restarting THINKING")
                         await self.client_ws.send_json({"type": "interrupted"})
+            elif self.interruption_words_threshold == 0 and self.interruption_enabled:
+                # Log that we're in immediate mode
+                pass  # Immediate mode is handled in _on_speech_started
 
             if result.is_final:
                 self.current_transcript += " " + result.text

@@ -97,7 +97,7 @@ interface Assistant {
   temperature: number;
   // Interruption settings
   interruptionEnabled?: boolean;
-  interruptionThreshold?: number;
+  interruptionWordsThreshold?: number;  // 0 = immediate, 1-10 = wait for N words
   stopOnHangup?: boolean;
 }
 
@@ -167,6 +167,7 @@ export default function LiveCallPage() {
   const audioInterruptedRef = React.useRef(false);  // Flag to block audio after interrupt
   const isAISpeakingRef = React.useRef(false);  // Track AI speaking for barge-in
   const lastBargeInTimeRef = React.useRef(0);  // Debounce barge-in signals
+  const interruptionSettingsRef = React.useRef({ enabled: true, wordsThreshold: 0 });  // Interruption settings
 
   // Latency tracking refs
   const speechEndTimeRef = React.useRef<number | null>(null); // When user stops speaking
@@ -200,7 +201,13 @@ export default function LiveCallPage() {
           if (parsed[assistantId]) {
             setAssistant(parsed[assistantId]);
             setSystemPrompt(parsed[assistantId].systemPrompt || DEFAULT_PROMPT);
+            // Update interruption settings ref
+            interruptionSettingsRef.current = {
+              enabled: parsed[assistantId].interruptionEnabled ?? true,
+              wordsThreshold: parsed[assistantId].interruptionWordsThreshold ?? 0,
+            };
             console.log("✅ Loaded assistant from assistants storage:", parsed[assistantId].name);
+            console.log("⚙️ Interruption settings:", interruptionSettingsRef.current);
             loaded = true;
           }
         } catch {
@@ -217,7 +224,13 @@ export default function LiveCallPage() {
           const parsed = JSON.parse(saved);
           setAssistant(parsed);
           setSystemPrompt(parsed.systemPrompt || DEFAULT_PROMPT);
+          // Update interruption settings ref
+          interruptionSettingsRef.current = {
+            enabled: parsed.interruptionEnabled ?? true,
+            wordsThreshold: parsed.interruptionWordsThreshold ?? 0,
+          };
           console.log("✅ Loaded assistant from test_assistant:", parsed.name);
+          console.log("⚙️ Interruption settings:", interruptionSettingsRef.current);
           loaded = true;
         } catch {
           console.error("Failed to load assistant config");
@@ -985,7 +998,12 @@ export default function LiveCallPage() {
           }
 
           // 🛑 BARGE-IN DETECTION: User speaking while AI is playing = INTERRUPT!
-          if (hasVoice && isAISpeakingRef.current) {
+          // Only send immediate barge-in if:
+          // 1. Interruption is enabled
+          // 2. Word threshold is 0 (immediate mode)
+          // If threshold > 0, let backend handle it based on word count
+          const { enabled, wordsThreshold } = interruptionSettingsRef.current;
+          if (hasVoice && isAISpeakingRef.current && enabled && wordsThreshold === 0) {
             const now = Date.now();
             // Debounce: only send barge-in once per second
             if (now - lastBargeInTimeRef.current > 1000) {
