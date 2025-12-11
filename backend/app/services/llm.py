@@ -243,35 +243,26 @@ class LLMService:
         if not anthropic_messages:
             logger.error("❌ No messages to send to Anthropic!")
 
-        client = None
-        response = None
-        try:
-            client = httpx.AsyncClient(timeout=60.0)
-            response = await client.send(
-                client.build_request("POST", url, headers=headers, json=payload),
-                stream=True,
-            )
-            if response.status_code != 200:
-                error_text = await response.aread()
-                logger.error(f"❌ Anthropic API error: {response.status_code} - {error_text.decode()}")
-            response.raise_for_status()
-
-            async for line in response.aiter_lines():
-                if line.startswith("data: "):
-                    try:
-                        import json
-                        data = json.loads(line[6:])
-                        if data["type"] == "content_block_delta":
-                            yield data["delta"].get("text", "")
-                    except:
-                        continue
-        except GeneratorExit:
-            logger.debug("Anthropic stream: generator closed by caller")
-        finally:
-            if response:
-                await response.aclose()
-            if client:
-                await client.aclose()
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            async with client.stream(
+                "POST",
+                url,
+                headers=headers,
+                json=payload,
+            ) as response:
+                if response.status_code != 200:
+                    error_text = await response.aread()
+                    logger.error(f"❌ Anthropic API error: {response.status_code} - {error_text.decode()}")
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if line.startswith("data: "):
+                        try:
+                            import json
+                            data = json.loads(line[6:])
+                            if data["type"] == "content_block_delta":
+                                yield data["delta"].get("text", "")
+                        except:
+                            continue
 
     async def _openai_generate(
         self,
@@ -354,35 +345,25 @@ class LLMService:
             "stream": True,
         }
 
-        client = None
-        response = None
-        try:
-            client = httpx.AsyncClient(timeout=60.0)
-            response = await client.send(
-                client.build_request("POST", url, headers=headers, json=payload),
-                stream=True,
-            )
-            response.raise_for_status()
-
-            async for line in response.aiter_lines():
-                if line.startswith("data: ") and line != "data: [DONE]":
-                    try:
-                        import json
-                        data = json.loads(line[6:])
-                        delta = data["choices"][0].get("delta", {})
-                        if "content" in delta:
-                            yield delta["content"]
-                    except:
-                        continue
-        except GeneratorExit:
-            # Generator was closed by caller - this is normal when breaking from loop
-            logger.debug("OpenAI stream: generator closed by caller")
-        finally:
-            # Proper cleanup in finally block
-            if response:
-                await response.aclose()
-            if client:
-                await client.aclose()
+        # Use async with for automatic cleanup - no finally block needed
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            async with client.stream(
+                "POST",
+                url,
+                headers=headers,
+                json=payload,
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if line.startswith("data: ") and line != "data: [DONE]":
+                        try:
+                            import json
+                            data = json.loads(line[6:])
+                            delta = data["choices"][0].get("delta", {})
+                            if "content" in delta:
+                                yield delta["content"]
+                        except:
+                            continue
 
     async def _google_generate(
         self,
@@ -509,32 +490,29 @@ class LLMService:
         # Retry loop for rate limiting
         last_error = None
         for attempt in range(MAX_RETRIES):
-            client = None
-            response = None
             try:
-                client = httpx.AsyncClient(timeout=60.0)
-                response = await client.send(
-                    client.build_request("POST", url, headers=headers, params=params, json=payload),
-                    stream=True,
-                )
-                response.raise_for_status()
-
-                async for line in response.aiter_lines():
-                    if line.startswith("data: "):
-                        try:
-                            import json
-                            data = json.loads(line[6:])
-                            if "candidates" in data:
-                                parts = data["candidates"][0].get("content", {}).get("parts", [])
-                                for part in parts:
-                                    if "text" in part:
-                                        yield part["text"]
-                        except:
-                            continue
-                return  # Success, exit retry loop
-            except GeneratorExit:
-                logger.debug("Google stream: generator closed by caller")
-                return
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    async with client.stream(
+                        "POST",
+                        url,
+                        headers=headers,
+                        params=params,
+                        json=payload,
+                    ) as response:
+                        response.raise_for_status()
+                        async for line in response.aiter_lines():
+                            if line.startswith("data: "):
+                                try:
+                                    import json
+                                    data = json.loads(line[6:])
+                                    if "candidates" in data:
+                                        parts = data["candidates"][0].get("content", {}).get("parts", [])
+                                        for part in parts:
+                                            if "text" in part:
+                                                yield part["text"]
+                                except:
+                                    continue
+                        return  # Success, exit retry loop
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 429:
                     last_error = e
@@ -547,11 +525,6 @@ class LLMService:
                         raise
                 else:
                     raise
-            finally:
-                if response:
-                    await response.aclose()
-                if client:
-                    await client.aclose()
 
     # ============== Groq (OpenAI-compatible) ==============
 
@@ -636,33 +609,24 @@ class LLMService:
             "stream": True,
         }
 
-        client = None
-        response = None
-        try:
-            client = httpx.AsyncClient(timeout=60.0)
-            response = await client.send(
-                client.build_request("POST", url, headers=headers, json=payload),
-                stream=True,
-            )
-            response.raise_for_status()
-
-            async for line in response.aiter_lines():
-                if line.startswith("data: ") and line != "data: [DONE]":
-                    try:
-                        import json
-                        data = json.loads(line[6:])
-                        delta = data["choices"][0].get("delta", {})
-                        if "content" in delta:
-                            yield delta["content"]
-                    except:
-                        continue
-        except GeneratorExit:
-            logger.debug("Groq stream: generator closed by caller")
-        finally:
-            if response:
-                await response.aclose()
-            if client:
-                await client.aclose()
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            async with client.stream(
+                "POST",
+                url,
+                headers=headers,
+                json=payload,
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if line.startswith("data: ") and line != "data: [DONE]":
+                        try:
+                            import json
+                            data = json.loads(line[6:])
+                            delta = data["choices"][0].get("delta", {})
+                            if "content" in delta:
+                                yield delta["content"]
+                        except:
+                            continue
 
     # ============== Together AI (OpenAI-compatible) ==============
 
@@ -747,30 +711,21 @@ class LLMService:
             "stream": True,
         }
 
-        client = None
-        response = None
-        try:
-            client = httpx.AsyncClient(timeout=60.0)
-            response = await client.send(
-                client.build_request("POST", url, headers=headers, json=payload),
-                stream=True,
-            )
-            response.raise_for_status()
-
-            async for line in response.aiter_lines():
-                if line.startswith("data: ") and line != "data: [DONE]":
-                    try:
-                        import json
-                        data = json.loads(line[6:])
-                        delta = data["choices"][0].get("delta", {})
-                        if "content" in delta:
-                            yield delta["content"]
-                    except:
-                        continue
-        except GeneratorExit:
-            logger.debug("Together stream: generator closed by caller")
-        finally:
-            if response:
-                await response.aclose()
-            if client:
-                await client.aclose()
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            async with client.stream(
+                "POST",
+                url,
+                headers=headers,
+                json=payload,
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if line.startswith("data: ") and line != "data: [DONE]":
+                        try:
+                            import json
+                            data = json.loads(line[6:])
+                            delta = data["choices"][0].get("delta", {})
+                            if "content" in delta:
+                                yield delta["content"]
+                        except:
+                            continue
