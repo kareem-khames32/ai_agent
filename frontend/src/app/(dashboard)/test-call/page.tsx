@@ -46,6 +46,9 @@ const DEFAULT_PROMPT = `أنت مساعد صوتي ذكي لشركة تحصيل 
 export default function TestCallPage() {
   const { addToast } = useToast();
 
+  // Hydration fix - wait for client mount
+  const [mounted, setMounted] = React.useState(false);
+
   // Connection state
   const [status, setStatus] = React.useState<ConnectionStatus>("disconnected");
   const [isRecording, setIsRecording] = React.useState(false);
@@ -68,6 +71,11 @@ export default function TestCallPage() {
   const transcriptEndRef = React.useRef<HTMLDivElement>(null);
   const listeningRef = React.useRef(false);
   const audioRef = React.useRef<HTMLAudioElement | null>(null);
+
+  // Set mounted on client
+  React.useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Auto-scroll transcript
   React.useEffect(() => {
@@ -351,6 +359,15 @@ export default function TestCallPage() {
   };
 
   const { hasSTT, hasLLM, hasTTS, isComplete } = checkCredentials();
+
+  // Prevent hydration mismatch - wait for client mount
+  if (!mounted) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <Loader2 className="h-8 w-8 animate-spin text-[var(--muted-foreground)]" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

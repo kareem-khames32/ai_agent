@@ -113,6 +113,9 @@ export default function LiveCallPage() {
   const searchParams = useSearchParams();
   const assistantId = searchParams.get("assistant");
 
+  // Hydration fix - wait for client mount
+  const [mounted, setMounted] = React.useState(false);
+
   // Assistant config
   const [assistant, setAssistant] = React.useState<Assistant | null>(null);
 
@@ -176,9 +179,14 @@ export default function LiveCallPage() {
   const lastAITextTimeRef = React.useRef<number | null>(null);
   const pendingCostRef = React.useRef<CostBreakdown | null>(null); // Store cost from cost_summary
 
+  // Set mounted on client
+  React.useEffect(() => {
+    setMounted(true);
+  }, []);
+
   // Load assistant from localStorage (always load last used or specific assistant)
   React.useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (!mounted) return;
 
     let loaded = false;
 
@@ -219,7 +227,7 @@ export default function LiveCallPage() {
     if (!loaded) {
       console.log("ℹ️ No saved assistant found, using defaults");
     }
-  }, [assistantId]);
+  }, [assistantId, mounted]);
 
   // Keep refs in sync with state
   React.useEffect(() => {
@@ -1140,6 +1148,15 @@ export default function LiveCallPage() {
 
   const { hasSTT, hasLLM, hasTTS, isComplete } = checkCredentials();
   const llmConfig = getLLMConfig();
+
+  // Prevent hydration mismatch - wait for client mount
+  if (!mounted) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <Loader2 className="h-8 w-8 animate-spin text-[var(--muted-foreground)]" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
