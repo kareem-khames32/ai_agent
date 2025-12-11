@@ -473,6 +473,7 @@ class RealtimeVoiceSession:
         self.last_speech_end_time: float = 0  # When last speech ended
         self.last_transcript_time: float = 0  # When last transcript was received (more reliable)
         self.user_is_speaking: bool = False  # Track if user is currently speaking
+        self.utterance_complete: bool = False  # True when speech_final received (user stopped)
 
         # 🧠 Smart re-thinking - cancel and restart if user adds more before AI speaks
         self.is_thinking: bool = False  # AI is processing (LLM) but not speaking yet
@@ -512,7 +513,12 @@ class RealtimeVoiceSession:
             if result.is_final:
                 self.current_transcript += " " + result.text
                 self.last_transcript_time = time.time()  # Track when we got this
-                logger.info(f"📝 Buffered: {result.text}")
+                # 🎯 speech_final means the ENTIRE utterance is complete (user stopped talking)
+                if result.speech_final:
+                    self.utterance_complete = True
+                    logger.info(f"📝 Utterance complete: {result.text}")
+                else:
+                    logger.info(f"📝 Buffered: {result.text}")
         except Exception as e:
             logger.error(f"❌ Error in _on_transcript: {e}")
 
@@ -521,6 +527,7 @@ class RealtimeVoiceSession:
         try:
             self.speech_start_time = time.time()
             self.user_is_speaking = True
+            self.utterance_complete = False  # Reset - new speech starting
             await self.client_ws.send_json({"type": "speech_started"})
 
             # VAPI-style interruption:
@@ -656,18 +663,25 @@ class RealtimeVoiceSession:
                     self.should_restart_thinking = True
                     continue
 
-                # Check if audio is still being received (more reliable than VAD)
+                # 🎯 Wait for utterance to be complete (speech_final from Deepgram)
+                # This is more reliable than just timeouts
                 time_since_last_audio = time.time() - self.last_audio_time
-                if time_since_last_audio < 1.2:  # Increased from 0.8 - wait longer for user
-                    continue
-
-                # Also check transcript timing
                 time_since_last_transcript = time.time() - self.last_transcript_time
-                if time_since_last_transcript < 0.8:  # Increased from 0.5 - wait for more speech
-                    continue
+
+                if self.utterance_complete:
+                    # Deepgram says utterance is complete - just wait a short time for any stragglers
+                    if time_since_last_transcript < 0.3:  # Short wait after speech_final
+                        continue
+                else:
+                    # No speech_final yet - use longer timeouts as fallback
+                    if time_since_last_audio < 1.5:  # Wait for audio to stop
+                        continue
+                    if time_since_last_transcript < 1.0:  # Wait for transcript to settle
+                        continue
 
                 # User truly stopped - process the complete message!
                 self.current_transcript = ""  # Clear buffer
+                self.utterance_complete = False  # Reset for next utterance
                 logger.info(f"📝 Processing complete message: '{transcript}'")
                 await self.process_transcript(transcript)
         except asyncio.CancelledError:
