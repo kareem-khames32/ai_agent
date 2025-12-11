@@ -881,22 +881,14 @@ class RealtimeVoiceSession:
             async for token in llm_stream:
                 if self.should_stop_speaking:
                     logger.info("🛑 should_stop_speaking detected - breaking LLM loop")
-                    # Properly close the stream before breaking
-                    try:
-                        await llm_stream.aclose()
-                    except Exception:
-                        pass
+                    # Just break - cleanup happens in generate_stream's finally block
                     break
 
                 # 🔄 Check if user added more input while we're thinking
                 # Only restart if we haven't started speaking yet
                 if self.should_restart_thinking and not self.is_speaking:
                     logger.info("🔄 should_restart_thinking detected (not speaking) - will restart")
-                    # Properly close the stream before breaking
-                    try:
-                        await llm_stream.aclose()
-                    except Exception:
-                        pass
+                    # Just break - cleanup happens in generate_stream's finally block
                     break
 
                 token_count += 1
