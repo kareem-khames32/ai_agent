@@ -878,17 +878,18 @@ class RealtimeVoiceSession:
                 temperature=self.llm_temperature,
             )
 
+            should_close_stream = False
             async for token in llm_stream:
                 if self.should_stop_speaking:
                     logger.info("🛑 should_stop_speaking detected - breaking LLM loop")
-                    # Just break - cleanup happens in generate_stream's finally block
+                    should_close_stream = True
                     break
 
                 # 🔄 Check if user added more input while we're thinking
                 # Only restart if we haven't started speaking yet
                 if self.should_restart_thinking and not self.is_speaking:
                     logger.info("🔄 should_restart_thinking detected (not speaking) - will restart")
-                    # Just break - cleanup happens in generate_stream's finally block
+                    should_close_stream = True
                     break
 
                 token_count += 1
@@ -931,6 +932,14 @@ class RealtimeVoiceSession:
                     if to_send:
                         await sentence_queue.put(to_send)
                         logger.info(f"📤 Forced send: '{to_send[:40]}...'")
+
+            # 🔧 Explicitly close the stream if we broke out early
+            if should_close_stream and llm_stream is not None:
+                try:
+                    await llm_stream.aclose()
+                    logger.debug("✅ LLM stream closed explicitly")
+                except Exception as e:
+                    logger.debug(f"Stream close: {e}")
 
             # 🔄 If restarting, don't send any response
             if self.should_restart_thinking and not self.is_speaking:
