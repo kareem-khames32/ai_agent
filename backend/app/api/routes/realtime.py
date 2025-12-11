@@ -9,6 +9,7 @@ import json
 import struct
 import time
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -20,6 +21,26 @@ import httpx
 from app.services.llm import LLMService, Message
 from app.services.tts import TTSService
 from app.services.stt_streaming import StreamingSTT, SentenceBuffer, TranscriptResult
+
+
+# Suppress GeneratorExit RuntimeError - it's a warning, not a real error
+def _handle_exception(loop, context):
+    exception = context.get("exception")
+    if exception and isinstance(exception, RuntimeError):
+        if "async generator ignored GeneratorExit" in str(exception):
+            # This is expected when we cancel streaming - ignore it
+            return
+    # For other exceptions, use default handler
+    loop.default_exception_handler(context)
+
+
+# Set up the exception handler
+try:
+    loop = asyncio.get_event_loop()
+    loop.set_exception_handler(_handle_exception)
+except RuntimeError:
+    pass  # No event loop yet, will be set up later
+
 
 # Recording storage directory
 RECORDINGS_DIR = Path("recordings")
