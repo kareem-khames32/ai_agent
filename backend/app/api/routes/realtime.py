@@ -668,42 +668,37 @@ class RealtimeVoiceSession:
         try:
             # 🔄 RESTART LOOP - if user adds more input while thinking, restart
             while True:
-                logger.debug(f"🔄 [process_transcript] Loop iteration: should_restart_thinking={self.should_restart_thinking}")
-
                 # Check if we should restart with new input from current_transcript
                 if self.should_restart_thinking:
-                    logger.info("🔄 [process_transcript] Restart requested - waiting for new transcript...")
+                    logger.info("🔄 Restart requested - collecting new input...")
 
                     # Wait briefly for new transcript (keep it fast!)
-                    for _ in range(5):  # Wait up to 0.5 seconds max
+                    for _ in range(3):  # Wait up to 0.3 seconds max
                         await asyncio.sleep(0.1)
                         if self.current_transcript.strip():
                             break
-                        # User stopped speaking? Don't wait more
-                        if not self.user_is_speaking and time.time() - self.last_transcript_time > 0.3:
+                        if not self.user_is_speaking:
                             break
 
                     new_input = self.current_transcript.strip()
                     if new_input:
-                        self.current_transcript = ""  # Clear buffer
+                        self.current_transcript = ""
                         transcript = f"{transcript} {new_input}"
-                        logger.info(f"🔄 [process_transcript] Restarting with combined: '{transcript}'")
-                        # Remove last user message if we already added it
+                        logger.info(f"🔄 Combined input: '{transcript[:60]}...'")
                         if self.messages and self.messages[-1].role == "user":
                             self.messages.pop()
                     else:
-                        # No new input, but we were interrupted - still restart with original
-                        logger.info(f"🔄 [process_transcript] No new input, restarting with original: '{transcript}'")
+                        logger.info(f"🔄 Restarting with: '{transcript[:60]}...'")
                         if self.messages and self.messages[-1].role == "user":
                             self.messages.pop()
 
                     self.should_restart_thinking = False
-                    self.is_thinking = True  # We're thinking again
-                    self.should_stop_speaking = False  # Reset stop flag for new attempt
+                    self.is_thinking = True
+                    self.should_stop_speaking = False
 
                 # Calculate STT latency
                 stt_latency = int((time.time() - self.speech_start_time) * 1000) if self.speech_start_time else 0
-                logger.info(f"🎯 Processing: '{transcript}' (latency: {stt_latency}ms)")
+                logger.info(f"🎯 Processing: '{transcript[:50]}...' ({stt_latency}ms)")
 
                 await self.client_ws.send_json({"type": "processing"})
 
@@ -730,27 +725,20 @@ class RealtimeVoiceSession:
                     logger.error(f"Streaming failed: {e}")
                     await self._process_non_streaming_response()
 
-                # Debug: check state after streaming
-                logger.debug(f"🔍 [process_transcript] After streaming: should_restart_thinking={self.should_restart_thinking}, is_thinking={self.is_thinking}")
-
                 # If we didn't restart, we're done
                 if not self.should_restart_thinking:
-                    logger.debug("🔍 [process_transcript] Breaking out of restart loop (no restart needed)")
                     break
-                else:
-                    logger.info("🔄 [process_transcript] Restart flag is set - continuing loop for new input")
+                # Otherwise continue loop for restart
 
         except Exception as e:
             logger.error(f"Error processing transcript: {e}")
             await self.client_ws.send_json({"type": "error", "message": str(e)})
 
         finally:
-            logger.debug(f"🔚 [process_transcript] finally block reached")
             self.is_processing = False
             self.is_thinking = False
-            # DON'T reset should_restart_thinking here - the loop handles it
             total_time = int((time.time() - process_start) * 1000)
-            logger.info(f"⏱️ Total turn time: {total_time}ms")
+            logger.info(f"⏱️ Turn complete: {total_time}ms")
 
     async def process_audio(self):
         """Process accumulated audio buffer (FALLBACK - batch STT) with restart support"""
@@ -778,29 +766,24 @@ class RealtimeVoiceSession:
             if transcript and transcript.strip():
                 # 🔄 RESTART LOOP - same as process_transcript
                 while True:
-                    logger.debug(f"🔄 [process_audio] Loop iteration: should_restart_thinking={self.should_restart_thinking}")
-
                     # Check if we should restart with new input
                     if self.should_restart_thinking:
-                        logger.info("🔄 [process_audio] Restart requested - waiting for new transcript...")
+                        logger.info("🔄 Restart requested - collecting new input...")
 
-                        # Wait briefly for new transcript (keep it fast!)
-                        for _ in range(5):  # Wait up to 0.5 seconds max
+                        # Wait briefly for new transcript
+                        for _ in range(3):  # 0.3 seconds max
                             await asyncio.sleep(0.1)
-                            if self.current_transcript.strip():
-                                break
-                            if not self.user_is_speaking and time.time() - self.last_transcript_time > 0.3:
+                            if self.current_transcript.strip() or not self.user_is_speaking:
                                 break
 
                         new_input = self.current_transcript.strip()
                         if new_input:
                             self.current_transcript = ""
                             transcript = f"{transcript} {new_input}"
-                            logger.info(f"🔄 [process_audio] Restarting with combined: '{transcript}'")
+                            logger.info(f"🔄 Combined: '{transcript[:60]}...'")
                             if self.messages and self.messages[-1].role == "user":
                                 self.messages.pop()
                         else:
-                            logger.info(f"🔄 [process_audio] No new input, restarting with original")
                             if self.messages and self.messages[-1].role == "user":
                                 self.messages.pop()
 
@@ -808,32 +791,24 @@ class RealtimeVoiceSession:
                         self.is_thinking = True
                         self.should_stop_speaking = False
 
-                    logger.info(f"User said: {transcript}")
+                    logger.info(f"👤 User: {transcript[:50]}...")
 
-                    # Send user transcript
                     await self.client_ws.send_json({
                         "type": "transcript",
                         "role": "user",
                         "text": transcript,
                     })
 
-                    # Add to conversation
                     self.messages.append(Message(role="user", content=transcript))
 
-                    # Use streaming pipeline for ultra-low latency (with fallback)
                     try:
                         await self._process_streaming_response()
                     except Exception as stream_err:
-                        logger.error(f"Streaming failed, falling back to non-streaming: {stream_err}")
+                        logger.error(f"Streaming failed: {stream_err}")
                         await self._process_non_streaming_response()
 
-                    # Check if we should restart
-                    logger.debug(f"🔍 [process_audio] After streaming: should_restart_thinking={self.should_restart_thinking}")
                     if not self.should_restart_thinking:
-                        logger.debug("🔍 [process_audio] Breaking out of restart loop")
                         break
-                    else:
-                        logger.info("🔄 [process_audio] Restart flag set - continuing loop")
 
             else:
                 await self.client_ws.send_json({"type": "no_speech"})
@@ -846,11 +821,10 @@ class RealtimeVoiceSession:
             })
 
         finally:
-            logger.debug("🔚 [process_audio] finally block reached")
             self.is_processing = False
             self.is_thinking = False
             total_time = int((time.time() - process_start) * 1000)
-            logger.info(f"⏱️ [process_audio] Total turn time: {total_time}ms")
+            logger.info(f"⏱️ Turn complete: {total_time}ms")
 
     async def _process_streaming_response(self):
         """
@@ -1028,12 +1002,11 @@ class RealtimeVoiceSession:
                         await sentence_queue.put(to_send)
                         logger.info(f"📤 Forced send: '{to_send[:40]}...'")
 
-            # 🔄 If we aborted, SAVE what was spoken so AI knows what it said
+            # 🔄 If aborted, save what was spoken so AI knows what it said
             if should_abort:
                 spoken_text = " ".join(spoken_sentences).strip()
-                logger.info(f"🔄 Aborted - spoken so far: '{spoken_text[:80]}...' ({len(spoken_sentences)} sentences)")
 
-                # Send final text stream update (what was generated when interrupted)
+                # Send final text stream (interrupted)
                 await self.client_ws.send_json({
                     "type": "text_stream",
                     "text": full_response,
@@ -1041,8 +1014,7 @@ class RealtimeVoiceSession:
                     "interrupted": True,
                 })
 
-                # 🎯 CRITICAL: Save what was SPOKEN to history (not full_response!)
-                # This is what the user actually heard
+                # Save spoken text to history
                 if spoken_text:
                     await self.client_ws.send_json({
                         "type": "transcript",
@@ -1051,14 +1023,11 @@ class RealtimeVoiceSession:
                         "partial": True,
                     })
                     self.messages.append(Message(role="assistant", content=spoken_text))
-                    logger.info(f"💾 Saved spoken text to history: '{spoken_text[:50]}...'")
+                    logger.info(f"💾 Saved: '{spoken_text[:50]}...'")
 
-                # Stop TTS worker
                 await sentence_queue.put(None)
                 tts_task.cancel()
-
-                logger.info("🔄 Returning to restart loop with context preserved...")
-                return  # Exit - restart loop will handle
+                return
 
             # Send remaining text
             if sentence_buffer.strip():
@@ -1139,13 +1108,10 @@ class RealtimeVoiceSession:
                 })
             raise
         finally:
-            logger.debug(f"🔚 _process_streaming_response finally block: should_restart_thinking={self.should_restart_thinking}")
             self.is_speaking = False
             self.is_thinking = False
-            self.should_stop_speaking = False  # Reset for next turn
-            # DON'T reset should_restart_thinking here - let process_transcript handle it
-            # The while loop needs to check this flag to decide whether to restart
-            self.last_ai_speech_time = time.time()  # Track when AI finished speaking
+            self.should_stop_speaking = False
+            self.last_ai_speech_time = time.time()
             tts_task.cancel()
 
     async def _record_ai_audio_chunk(self, text: str):
