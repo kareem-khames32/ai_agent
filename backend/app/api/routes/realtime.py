@@ -668,6 +668,8 @@ class RealtimeVoiceSession:
         try:
             # 🔄 RESTART LOOP - if user adds more input while thinking, restart
             while True:
+                logger.debug(f"🔄 Loop iteration: should_restart_thinking={self.should_restart_thinking}")
+
                 # Check if we should restart with new input from current_transcript
                 if self.should_restart_thinking:
                     logger.info("🔄 Restart requested - waiting for new transcript...")
@@ -729,9 +731,15 @@ class RealtimeVoiceSession:
                     logger.error(f"Streaming failed: {e}")
                     await self._process_non_streaming_response()
 
+                # Debug: check state after streaming
+                logger.debug(f"🔍 After streaming: should_restart_thinking={self.should_restart_thinking}, is_thinking={self.is_thinking}")
+
                 # If we didn't restart, we're done
                 if not self.should_restart_thinking:
+                    logger.debug("🔍 Breaking out of restart loop (no restart needed)")
                     break
+                else:
+                    logger.info("🔄 Restart flag is set - continuing loop for new input")
 
         except Exception as e:
             logger.error(f"Error processing transcript: {e}")
