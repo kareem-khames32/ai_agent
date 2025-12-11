@@ -124,30 +124,24 @@ class LLMService:
         max_tokens: int = 1024,
         temperature: float = 0.7,
     ) -> AsyncGenerator[str, None]:
-        """Stream response from the LLM with proper cleanup on early termination"""
+        """Stream response from the LLM"""
         if self.provider == "anthropic":
-            inner_gen = self._anthropic_stream(messages, system_prompt, max_tokens, temperature)
+            async for chunk in self._anthropic_stream(messages, system_prompt, max_tokens, temperature):
+                yield chunk
         elif self.provider == "openai":
-            inner_gen = self._openai_stream(messages, system_prompt, max_tokens, temperature)
+            async for chunk in self._openai_stream(messages, system_prompt, max_tokens, temperature):
+                yield chunk
         elif self.provider == "google":
-            inner_gen = self._google_stream(messages, system_prompt, max_tokens, temperature)
+            async for chunk in self._google_stream(messages, system_prompt, max_tokens, temperature):
+                yield chunk
         elif self.provider == "groq":
-            inner_gen = self._groq_stream(messages, system_prompt, max_tokens, temperature)
+            async for chunk in self._groq_stream(messages, system_prompt, max_tokens, temperature):
+                yield chunk
         elif self.provider == "together":
-            inner_gen = self._together_stream(messages, system_prompt, max_tokens, temperature)
+            async for chunk in self._together_stream(messages, system_prompt, max_tokens, temperature):
+                yield chunk
         else:
             raise ValueError(f"Unknown LLM provider: {self.provider}")
-
-        try:
-            async for chunk in inner_gen:
-                yield chunk
-        except GeneratorExit:
-            # Handle early termination gracefully - don't re-raise
-            # The inner generator will be closed automatically
-            logger.debug("LLM stream terminated early")
-        except Exception as e:
-            logger.error(f"LLM stream error: {e}")
-            raise
 
     async def _anthropic_generate(
         self,
@@ -246,30 +240,26 @@ class LLMService:
 
         # Use shared client for connection reuse
         client = get_http_client("https://api.anthropic.com")
-        try:
-            async with client.stream(
-                "POST",
-                url,
-                headers=headers,
-                json=payload,
-                timeout=60.0,
-            ) as response:
-                if response.status_code != 200:
-                    error_text = await response.aread()
-                    logger.error(f"❌ Anthropic API error: {response.status_code} - {error_text.decode()}")
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if line.startswith("data: "):
-                        try:
-                            import json
-                            data = json.loads(line[6:])
-                            if data["type"] == "content_block_delta":
-                                yield data["delta"].get("text", "")
-                        except:
-                            continue
-        except GeneratorExit:
-            logger.debug("Anthropic stream terminated early")
-            return
+        async with client.stream(
+            "POST",
+            url,
+            headers=headers,
+            json=payload,
+            timeout=60.0,
+        ) as response:
+            if response.status_code != 200:
+                error_text = await response.aread()
+                logger.error(f"❌ Anthropic API error: {response.status_code} - {error_text.decode()}")
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    try:
+                        import json
+                        data = json.loads(line[6:])
+                        if data["type"] == "content_block_delta":
+                            yield data["delta"].get("text", "")
+                    except:
+                        continue
 
     async def _openai_generate(
         self,
@@ -352,29 +342,25 @@ class LLMService:
             "stream": True,
         }
 
-        try:
-            async with httpx.AsyncClient() as client:
-                async with client.stream(
-                    "POST",
-                    url,
-                    headers=headers,
-                    json=payload,
-                    timeout=60.0,
-                ) as response:
-                    response.raise_for_status()
-                    async for line in response.aiter_lines():
-                        if line.startswith("data: ") and line != "data: [DONE]":
-                            try:
-                                import json
-                                data = json.loads(line[6:])
-                                delta = data["choices"][0].get("delta", {})
-                                if "content" in delta:
-                                    yield delta["content"]
-                            except:
-                                continue
-        except GeneratorExit:
-            logger.debug("OpenAI stream terminated early")
-            return
+        async with httpx.AsyncClient() as client:
+            async with client.stream(
+                "POST",
+                url,
+                headers=headers,
+                json=payload,
+                timeout=60.0,
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if line.startswith("data: ") and line != "data: [DONE]":
+                        try:
+                            import json
+                            data = json.loads(line[6:])
+                            delta = data["choices"][0].get("delta", {})
+                            if "content" in delta:
+                                yield delta["content"]
+                        except:
+                            continue
 
     async def _google_generate(
         self,
@@ -525,9 +511,6 @@ class LLMService:
                                 except:
                                     continue
                         return  # Success, exit retry loop
-            except GeneratorExit:
-                logger.debug("Google stream terminated early")
-                return
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 429:
                     last_error = e
@@ -626,28 +609,24 @@ class LLMService:
 
         # Use shared client for connection reuse (Groq is ultra-fast!)
         client = get_http_client("https://api.groq.com")
-        try:
-            async with client.stream(
-                "POST",
-                url,
-                headers=headers,
-                json=payload,
-                timeout=60.0,
-            ) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if line.startswith("data: ") and line != "data: [DONE]":
-                        try:
-                            import json
-                            data = json.loads(line[6:])
-                            delta = data["choices"][0].get("delta", {})
-                            if "content" in delta:
-                                yield delta["content"]
-                        except:
-                            continue
-        except GeneratorExit:
-            logger.debug("Groq stream terminated early")
-            return
+        async with client.stream(
+            "POST",
+            url,
+            headers=headers,
+            json=payload,
+            timeout=60.0,
+        ) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if line.startswith("data: ") and line != "data: [DONE]":
+                    try:
+                        import json
+                        data = json.loads(line[6:])
+                        delta = data["choices"][0].get("delta", {})
+                        if "content" in delta:
+                            yield delta["content"]
+                    except:
+                        continue
 
     # ============== Together AI (OpenAI-compatible) ==============
 
@@ -732,26 +711,22 @@ class LLMService:
             "stream": True,
         }
 
-        try:
-            async with httpx.AsyncClient() as client:
-                async with client.stream(
-                    "POST",
-                    url,
-                    headers=headers,
-                    json=payload,
-                    timeout=60.0,
-                ) as response:
-                    response.raise_for_status()
-                    async for line in response.aiter_lines():
-                        if line.startswith("data: ") and line != "data: [DONE]":
-                            try:
-                                import json
-                                data = json.loads(line[6:])
-                                delta = data["choices"][0].get("delta", {})
-                                if "content" in delta:
-                                    yield delta["content"]
-                            except:
-                                continue
-        except GeneratorExit:
-            logger.debug("Together stream terminated early")
-            return
+        async with httpx.AsyncClient() as client:
+            async with client.stream(
+                "POST",
+                url,
+                headers=headers,
+                json=payload,
+                timeout=60.0,
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if line.startswith("data: ") and line != "data: [DONE]":
+                        try:
+                            import json
+                            data = json.loads(line[6:])
+                            delta = data["choices"][0].get("delta", {})
+                            if "content" in delta:
+                                yield delta["content"]
+                        except:
+                            continue
