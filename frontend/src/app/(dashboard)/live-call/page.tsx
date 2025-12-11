@@ -619,7 +619,7 @@ export default function LiveCallPage() {
             first_message_mode: assistant?.firstMessageMode || "assistant-speaks-first",
             // Interruption settings
             interruption_enabled: assistant?.interruptionEnabled ?? true,
-            interruption_threshold: assistant?.interruptionThreshold ?? 3,
+            interruption_words_threshold: assistant?.interruptionWordsThreshold ?? 0,
             stop_on_hangup: assistant?.stopOnHangup ?? true,
           },
         }));

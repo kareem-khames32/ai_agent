@@ -462,6 +462,9 @@ export default function AssistantEditorPage() {
     voicemailDetection: true,
     maxDuration: 1800,
     silenceTimeout: 30,
+    // Interruption settings
+    interruptionEnabled: true,
+    interruptionWordsThreshold: 0,  // 0 = immediate, up to 10 words
   });
 
   const updateFormData = (field: string, value: unknown) => {
@@ -507,6 +510,8 @@ export default function AssistantEditorPage() {
       voicemailDetection: true,
       maxDuration: 1800,
       silenceTimeout: 30,
+      interruptionEnabled: true,
+      interruptionWordsThreshold: 0,
     },
     "2": {
       id: "2",
@@ -533,6 +538,8 @@ export default function AssistantEditorPage() {
       voicemailDetection: true,
       maxDuration: 1800,
       silenceTimeout: 30,
+      interruptionEnabled: true,
+      interruptionWordsThreshold: 0,
     },
     "3": {
       id: "3",
@@ -559,6 +566,8 @@ export default function AssistantEditorPage() {
       voicemailDetection: true,
       maxDuration: 1800,
       silenceTimeout: 30,
+      interruptionEnabled: true,
+      interruptionWordsThreshold: 0,
     },
   };
 
@@ -629,6 +638,9 @@ export default function AssistantEditorPage() {
         transcriberProvider: formData.transcriberProvider,
         transcriberModel: formData.transcriberModel,
         transcriberLanguage: formData.transcriberLanguage,
+        // Interruption settings
+        interruptionEnabled: formData.interruptionEnabled,
+        interruptionWordsThreshold: formData.interruptionWordsThreshold,
       }));
 
       console.log("✅ Assistant saved:", assistantId);
@@ -1107,6 +1119,56 @@ export default function AssistantEditorPage() {
                   label="Voicemail Detection"
                   description="Detect and handle voicemail greetings"
                 />
+              </CardContent>
+            </Card>
+
+            {/* Stop Speaking Plan - Interruption Settings */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Stop Speaking Plan</CardTitle>
+                <CardDescription>Configure when the assistant should stop talking</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <Switch
+                  checked={formData.interruptionEnabled}
+                  onCheckedChange={(v) => updateFormData("interruptionEnabled", v)}
+                  label="Enable Interruption"
+                  description="Allow customer to interrupt the assistant while speaking"
+                />
+
+                {formData.interruptionEnabled && (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-[var(--muted-foreground)]">#</span>
+                      <div className="flex-1">
+                        <label className="text-sm font-medium">Number of words</label>
+                        <p className="text-xs text-[var(--muted-foreground)]">
+                          Words the customer must say before the assistant stops talking
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <div className="flex-1">
+                        <Slider
+                          value={formData.interruptionWordsThreshold}
+                          onChange={(v) => updateFormData("interruptionWordsThreshold", v)}
+                          min={0}
+                          max={10}
+                          step={1}
+                        />
+                      </div>
+                      <div className="w-12 h-10 flex items-center justify-center border rounded-md bg-[var(--muted)] text-sm font-medium">
+                        {formData.interruptionWordsThreshold}
+                      </div>
+                    </div>
+                    <p className="text-xs text-[var(--muted-foreground)]">
+                      {formData.interruptionWordsThreshold === 0
+                        ? "Immediate: Assistant stops as soon as customer speaks"
+                        : `Wait for ${formData.interruptionWordsThreshold} word${formData.interruptionWordsThreshold > 1 ? 's' : ''} before stopping`
+                      }
+                    </p>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </div>

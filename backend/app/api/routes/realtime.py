@@ -407,7 +407,7 @@ class RealtimeVoiceSession:
         language: str = "ar",
         # Interruption settings
         interruption_enabled: bool = True,
-        interruption_threshold: int = 3,
+        interruption_words_threshold: int = 0,  # 0 = immediate, 1-10 = wait for N words
         # Call behavior
         stop_on_hangup: bool = True,
     ):
@@ -443,7 +443,8 @@ class RealtimeVoiceSession:
 
         # Interruption settings
         self.interruption_enabled = interruption_enabled
-        self.interruption_threshold = interruption_threshold
+        self.interruption_words_threshold = interruption_words_threshold
+        self.interrupt_word_count = 0  # Track words during current speech
         self.stop_on_hangup = stop_on_hangup
         self.is_speaking = False  # Is AI currently speaking?
         self.should_stop_speaking = False  # Should we stop TTS?
@@ -510,6 +511,31 @@ class RealtimeVoiceSession:
     async def _on_transcript(self, result: TranscriptResult):
         """Handle transcript from streaming STT - BUFFER ONLY, don't process yet"""
         try:
+            # 🎯 Word-threshold based interruption
+            # Count words and trigger interruption when threshold is reached
+            if self.interruption_enabled and self.interruption_words_threshold > 0:
+                word_count = len(result.text.strip().split())
+                self.interrupt_word_count = max(self.interrupt_word_count, word_count)
+
+                # Check if we've reached the threshold and haven't interrupted yet
+                if (self.interrupt_word_count >= self.interruption_words_threshold and
+                    (self.is_speaking or self.is_thinking) and
+                    not self.should_stop_speaking):
+
+                    if self.is_speaking:
+                        # AI is speaking → stop audio only, continue LLM
+                        self.should_stop_speaking = True
+                        self.audio_only_stop = True
+                        logger.info(f"🛑 Word-threshold ({self.interrupt_word_count}/{self.interruption_words_threshold}) reached: stopping AUDIO only")
+                        await self.client_ws.send_json({"type": "stop_audio"})
+                    elif self.is_thinking:
+                        # AI is thinking → restart with new input
+                        self.should_stop_speaking = True
+                        self.audio_only_stop = False
+                        self.should_restart_thinking = True
+                        logger.info(f"🛑 Word-threshold ({self.interrupt_word_count}/{self.interruption_words_threshold}) reached: restarting THINKING")
+                        await self.client_ws.send_json({"type": "interrupted"})
+
             if result.is_final:
                 self.current_transcript += " " + result.text
                 self.last_transcript_time = time.time()  # Track when we got this
@@ -528,12 +554,13 @@ class RealtimeVoiceSession:
             self.speech_start_time = time.time()
             self.user_is_speaking = True
             self.utterance_complete = False  # Reset - new speech starting
+            self.interrupt_word_count = 0  # Reset word counter for new speech
             await self.client_ws.send_json({"type": "speech_started"})
 
             # VAPI-style interruption:
-            # - If AI is SPEAKING → stop audio only, DON'T restart thinking
-            # - If AI is THINKING (not speaking yet) → restart with new input
-            if self.interruption_enabled:
+            # - If threshold is 0 → immediate interruption
+            # - If threshold > 0 → wait for N words before interrupting (handled in _on_transcript)
+            if self.interruption_enabled and self.interruption_words_threshold == 0:
                 if self.is_speaking:
                     # AI is speaking → stop audio only, continue LLM (like VAPI)
                     self.should_stop_speaking = True
@@ -548,6 +575,8 @@ class RealtimeVoiceSession:
                     self.should_restart_thinking = True
                     logger.info(f"🛑 Barge-in: restarting THINKING (thinking=True)")
                     await self.client_ws.send_json({"type": "interrupted"})
+            elif self.interruption_enabled and self.interruption_words_threshold > 0:
+                logger.info(f"🎯 Speech started - waiting for {self.interruption_words_threshold} words before interruption")
         except Exception as e:
             logger.error(f"❌ Error in _on_speech_started: {e}")
 
@@ -2081,7 +2110,7 @@ async def realtime_voice_websocket(
 
                     # Get interruption settings
                     interruption_enabled = config.get("interruption_enabled", True)
-                    interruption_threshold = config.get("interruption_threshold", 3)
+                    interruption_words_threshold = config.get("interruption_words_threshold", 0)
                     stop_on_hangup = config.get("stop_on_hangup", True)
 
                     # TTS settings
@@ -2091,7 +2120,7 @@ async def realtime_voice_websocket(
                     logger.info(f"🎙️ STT: {stt_provider}")
                     logger.info(f"🤖 LLM: {llm_provider} / {llm_model} / temp={llm_temperature}")
                     logger.info(f"🔊 TTS: {config.get('tts_provider')} / voice={config.get('tts_voice_id')} / speed={tts_voice_speed}")
-                    logger.info(f"⚙️ Interruption: enabled={interruption_enabled}, threshold={interruption_threshold}")
+                    logger.info(f"⚙️ Interruption: enabled={interruption_enabled}, words_threshold={interruption_words_threshold}")
 
                     session = RealtimeVoiceSession(
                         session_id=session_id,
@@ -2116,7 +2145,7 @@ async def realtime_voice_websocket(
                         system_prompt=config.get("system_prompt", "أنت مساعد صوتي ذكي. كن مختصراً."),
                         language=config.get("language", "ar"),
                         interruption_enabled=interruption_enabled,
-                        interruption_threshold=interruption_threshold,
+                        interruption_words_threshold=interruption_words_threshold,
                         stop_on_hangup=stop_on_hangup,
                     )
 
