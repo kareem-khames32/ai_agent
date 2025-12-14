@@ -168,6 +168,7 @@ export default function LiveCallPage() {
   const isAISpeakingRef = React.useRef(false);  // Track AI speaking for barge-in
   const lastBargeInTimeRef = React.useRef(0);  // Debounce barge-in signals
   const interruptionSettingsRef = React.useRef({ enabled: true, wordsThreshold: 0 });  // Interruption settings
+  const speechStartTimeRef = React.useRef<number | null>(null);  // When user started speaking (for word estimation)
 
   // Latency tracking refs
   const speechEndTimeRef = React.useRef<number | null>(null); // When user stops speaking
@@ -1010,22 +1011,40 @@ export default function LiveCallPage() {
           }
 
           // 🛑 BARGE-IN DETECTION: User speaking while AI is playing = INTERRUPT!
-          // Only send immediate barge-in if:
-          // 1. Interruption is enabled
-          // 2. Word threshold is 0 (immediate mode)
-          // If threshold > 0, let backend handle it based on word count
+          // Use speech DURATION to estimate word count (works with ALL STT providers including Azure batch)
+          // Average speaking rate: ~2.5 words/second (150 words/minute)
+          const WORDS_PER_SECOND = 2.5;
           const { enabled, wordsThreshold } = interruptionSettingsRef.current;
-          if (hasVoice && isAISpeakingRef.current && enabled && wordsThreshold === 0) {
+
+          if (hasVoice && isAISpeakingRef.current && enabled) {
             const now = Date.now();
-            // Debounce: only send barge-in once per second
-            if (now - lastBargeInTimeRef.current > 1000) {
-              console.log("🛑🛑🛑 BARGE-IN DETECTED! User speaking while AI playing! 🛑🛑🛑");
+
+            // Track speech start time
+            if (speechStartTimeRef.current === null) {
+              speechStartTimeRef.current = now;
+              console.log("🎤 Started tracking speech for word estimation");
+            }
+
+            // Calculate estimated word count based on speech duration
+            const speechDurationMs = now - speechStartTimeRef.current;
+            const estimatedWords = Math.floor((speechDurationMs / 1000) * WORDS_PER_SECOND);
+
+            // Check if we should trigger barge-in
+            // Threshold 0 = immediate, otherwise wait for estimated word count
+            const shouldBargeIn = wordsThreshold === 0 || estimatedWords >= wordsThreshold;
+
+            if (shouldBargeIn && now - lastBargeInTimeRef.current > 1000) {
+              console.log(`🛑🛑🛑 BARGE-IN! Duration: ${speechDurationMs}ms, Est. words: ${estimatedWords}, Threshold: ${wordsThreshold} 🛑🛑🛑`);
               lastBargeInTimeRef.current = now;
+              speechStartTimeRef.current = null;  // Reset for next utterance
               // Send barge-in signal to backend
               wsRef.current.send(JSON.stringify({ type: "barge_in" }));
               // Immediately stop audio on frontend
               clearAudioQueue();
             }
+          } else if (!hasVoice) {
+            // Reset speech tracking when not speaking
+            speechStartTimeRef.current = null;
           }
 
           // ALWAYS send audio when AI is speaking (for barge-in detection) or when user has voice
