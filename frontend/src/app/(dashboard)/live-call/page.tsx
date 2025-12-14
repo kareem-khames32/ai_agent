@@ -230,7 +230,12 @@ export default function LiveCallPage() {
             wordsThreshold: parsed.interruptionWordsThreshold ?? 0,
           };
           console.log("✅ Loaded assistant from test_assistant:", parsed.name);
-          console.log("⚙️ Interruption settings:", interruptionSettingsRef.current);
+          console.log("📦 Full assistant data:", JSON.stringify(parsed, null, 2));
+          console.log("⚙️ Interruption settings from assistant:", {
+            interruptionEnabled: parsed.interruptionEnabled,
+            interruptionWordsThreshold: parsed.interruptionWordsThreshold,
+          });
+          console.log("⚙️ Interruption settings ref:", interruptionSettingsRef.current);
           loaded = true;
         } catch {
           console.error("Failed to load assistant config");

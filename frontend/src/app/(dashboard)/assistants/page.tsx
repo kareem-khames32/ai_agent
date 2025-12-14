@@ -158,8 +158,9 @@ export default function AssistantsPage() {
     if (saved) {
       try {
         const savedAssistants = JSON.parse(saved);
-        const savedList = Object.values(savedAssistants).map((a: unknown) => {
-          const assistant = a as Record<string, unknown>;
+        const savedList = Object.values(savedAssistants)
+          .filter((a): a is Record<string, unknown> => a !== null && typeof a === 'object' && 'id' in a)
+          .map((assistant) => {
           return {
             id: assistant.id as string,
             organizationId: "org1",
