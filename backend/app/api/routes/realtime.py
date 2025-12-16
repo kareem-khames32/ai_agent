@@ -715,6 +715,7 @@ class RealtimeVoiceSession:
             self.user_is_speaking = True
             self.utterance_complete = False  # Reset - new speech starting
             self.interrupt_word_count = 0  # Reset word counter for new speech
+            self.last_speech_end_time = 0  # 🎯 KEY: Reset so check_and_process waits for speech_ended
             await self.client_ws.send_json({"type": "speech_started"})
 
             # 🎯 VAPI-style: Don't interrupt immediately on speech start
@@ -869,18 +870,27 @@ class RealtimeVoiceSession:
                 # 🎯 Wait for utterance to be complete (speech_final from Deepgram)
                 time_since_last_audio = time.time() - self.last_audio_time
                 time_since_last_transcript = time.time() - self.last_transcript_time
+                time_since_speech_end = time.time() - self.last_speech_end_time if self.last_speech_end_time else 0
+
+                # 🎯 KEY FIX: Must have speech_ended event AND enough silence
+                # This prevents processing while user is still mid-sentence
+                if self.last_speech_end_time == 0:
+                    # No speech_ended event yet - keep waiting
+                    continue
 
                 if self.utterance_complete:
                     # 🎯 Utterance complete - process with small buffer for trailing words
-                    if time_since_last_transcript < 0.2:  # 200ms buffer
+                    if time_since_last_transcript < 0.3:  # 300ms buffer
                         continue
-                    if time_since_last_audio < 0.2:  # 200ms buffer
+                    if time_since_speech_end < 0.3:  # 300ms after speech ended
                         continue
                 else:
-                    # 🎯 No speech_final yet - wait for natural pause
-                    if time_since_last_audio < 0.5:  # 500ms for natural pauses
+                    # 🎯 No speech_final yet - wait longer for natural pause
+                    if time_since_last_audio < 0.6:  # 600ms for audio silence
                         continue
-                    if time_since_last_transcript < 0.4:  # 400ms for transcript
+                    if time_since_last_transcript < 0.5:  # 500ms for transcript
+                        continue
+                    if time_since_speech_end < 0.5:  # 500ms after VAD says speech ended
                         continue
 
                 # User truly stopped - process the complete message!
