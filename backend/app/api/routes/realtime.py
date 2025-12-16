@@ -484,6 +484,9 @@ class RealtimeVoiceSession:
         self.played_sequences: set[int] = set()  # Sequences confirmed played by frontend
         self.sequence_to_text: dict[int, str] = {}  # Map sequence number to text
 
+        # 🎯 Track unspoken text when interrupted - to continue in next response
+        self.unspoken_text: str = ""  # Text AI wanted to say but was interrupted
+
     async def init_streaming_stt(self):
         """Initialize streaming STT connection"""
         if self.stt_provider == "deepgram" and self.stt_api_key:
@@ -830,8 +833,14 @@ class RealtimeVoiceSession:
                 })
                 self._is_restart_iteration = False  # Reset flag
 
-                # Add to conversation
-                self.messages.append(Message(role="user", content=transcript))
+                # Add to conversation - combine with last user message if exists
+                if self.messages and self.messages[-1].role == "user":
+                    # Combine with previous user message
+                    combined = self.messages[-1].content + " " + transcript
+                    self.messages[-1] = Message(role="user", content=combined)
+                    logger.info(f"🔗 Combined user messages: '{combined[:60]}...'")
+                else:
+                    self.messages.append(Message(role="user", content=transcript))
 
                 # Track STT cost with model for accurate pricing
                 audio_duration = len(self.audio_buffer) / (16000 * 2) if self.audio_buffer else 1.0
@@ -937,7 +946,13 @@ class RealtimeVoiceSession:
                         "text": transcript,
                     })
 
-                    self.messages.append(Message(role="user", content=transcript))
+                    # Add to conversation - combine with last user message if exists
+                    if self.messages and self.messages[-1].role == "user":
+                        combined = self.messages[-1].content + " " + transcript
+                        self.messages[-1] = Message(role="user", content=combined)
+                        logger.info(f"🔗 Combined user messages: '{combined[:60]}...'")
+                    else:
+                        self.messages.append(Message(role="user", content=transcript))
 
                     try:
                         await self._process_streaming_response()
@@ -1062,6 +1077,13 @@ class RealtimeVoiceSession:
             llm_start = time.time()
             first_token_time = None
             llm_stream = None  # Store generator reference for proper cleanup
+
+            # 🎯 If we have unspoken text from interruption, speak it first!
+            if self.unspoken_text:
+                logger.info(f"📢 Speaking unspoken text first: '{self.unspoken_text[:50]}...'")
+                # Add to sentence queue so it's spoken before new response
+                await sentence_queue.put(self.unspoken_text)
+                self.unspoken_text = ""  # Clear after queuing
 
             logger.info(f"📡 LLM: {self.llm_provider}/{self.llm_model}")
 
@@ -1228,6 +1250,22 @@ class RealtimeVoiceSession:
                     })
                     self.messages.append(Message(role="assistant", content=spoken_text))
 
+                    # 🎯 Save unspoken text to continue in next response
+                    if full_response and len(full_response) > len(spoken_text):
+                        # Find where spoken_text ends in full_response and get the rest
+                        spoken_clean = spoken_text.strip()
+                        full_clean = full_response.strip()
+                        if spoken_clean in full_clean:
+                            idx = full_clean.find(spoken_clean) + len(spoken_clean)
+                            self.unspoken_text = full_clean[idx:].strip()
+                        else:
+                            # Fallback: just take from after the last spoken word
+                            self.unspoken_text = full_clean[len(spoken_clean):].strip()
+                        if self.unspoken_text:
+                            logger.info(f"📝 Saved unspoken text for next response: '{self.unspoken_text[:50]}...'")
+                    else:
+                        self.unspoken_text = ""
+
                     # Track costs
                     input_tokens = len(self.system_prompt) // 4 + sum(len(m.content) for m in self.messages) // 4
                     output_tokens = len(spoken_text) // 4
@@ -1266,8 +1304,15 @@ class RealtimeVoiceSession:
 
             if was_interrupted and spoken_text:
                 logger.info(f"🛑 Interrupted! Saving only spoken: '{spoken_text[:50]}...' (vs full: '{full_response[:50]}...')")
+                # 🎯 Save unspoken text for next response
+                if full_response and len(full_response) > len(spoken_text):
+                    unspoken = full_response[len(spoken_text):].strip()
+                    if unspoken:
+                        self.unspoken_text = unspoken
+                        logger.info(f"📝 Saved unspoken text: '{unspoken[:50]}...'")
             else:
                 logger.info(f"✅ Complete response: '{text_to_save[:50]}...'")
+                self.unspoken_text = ""  # Clear - no unspoken text
 
             # Send transcript (for history display)
             if text_to_save:

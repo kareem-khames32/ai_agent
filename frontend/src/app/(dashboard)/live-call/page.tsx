@@ -701,6 +701,24 @@ export default function LiveCallPage() {
                 // No user message found, just add it
                 console.log(`➕ No user message to replace, adding new: "${message.text.substring(0, 30)}..."`);
               }
+
+              // 🎯 COMBINE consecutive user messages before AI responds
+              if (message.role === "user" && prev.length > 0) {
+                const lastMsg = prev[prev.length - 1];
+                // If last message was also from user, combine them!
+                if (lastMsg.role === "user") {
+                  const newTranscript = [...prev];
+                  newTranscript[newTranscript.length - 1] = {
+                    ...lastMsg,
+                    text: lastMsg.text + " " + message.text,  // Combine with space
+                    timestamp: new Date(),  // Update timestamp
+                  };
+                  console.log(`🔗 Combined user messages: "${newTranscript[newTranscript.length - 1].text.substring(0, 50)}..."`);
+                  transcriptRef.current = newTranscript;
+                  return newTranscript;
+                }
+              }
+
               const newTranscript = [...prev, newEntry];
               transcriptRef.current = newTranscript; // Update ref directly
               return newTranscript;
