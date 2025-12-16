@@ -681,19 +681,29 @@ class RealtimeVoiceSession:
                             logger.info(f"🛑 Word-threshold ({self.interrupt_word_count}) reached: restarting THINKING")
                             await self.client_ws.send_json({"type": "interrupted"})
 
+            # 🎯 Only skip backchannels when AI is ACTIVELY speaking/thinking
+            # When AI is idle, ALL user input should be buffered (even greetings)
+            ai_is_busy = self.is_speaking or self.is_thinking
+
+            if speech_type == "backchannel" and ai_is_busy:
+                # AI is busy and user said backchannel - ignore
+                logger.info(f"💬 Backchannel not buffered (AI busy): '{result.text}'")
+                return
+
+            # 🎯 Buffer BOTH interim and final results
+            # Azure Streaming often doesn't send final results, so we use interim too
             if result.is_final:
-                # Don't buffer backchannels - they're not real input
-                if speech_type != "backchannel":
-                    self.current_transcript += " " + result.text
-                    self.last_transcript_time = time.time()
-                    # 🎯 speech_final means the ENTIRE utterance is complete
-                    if result.speech_final:
-                        self.utterance_complete = True
-                        logger.info(f"📝 Utterance complete: {result.text}")
-                    else:
-                        logger.info(f"📝 Buffered: {result.text}")
-                else:
-                    logger.info(f"💬 Backchannel not buffered: '{result.text}'")
+                # Final result - use it directly (replace any interim)
+                self.current_transcript = result.text
+                self.last_transcript_time = time.time()
+                self.utterance_complete = True
+                logger.info(f"📝 Final: {result.text}")
+            else:
+                # Interim result - update current transcript (Azure often only sends these)
+                # Use the full interim text, not append (it already contains full utterance)
+                self.current_transcript = result.text
+                self.last_transcript_time = time.time()
+                logger.info(f"📝 Interim buffered: {result.text[:50]}...")
         except Exception as e:
             logger.error(f"❌ Error in _on_transcript: {e}")
 
