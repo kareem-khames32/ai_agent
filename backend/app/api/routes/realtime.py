@@ -490,8 +490,8 @@ class RealtimeVoiceSession:
             self.streaming_stt = StreamingSTT(
                 api_key=self.stt_api_key,
                 language=self.language,
-                endpointing=300,  # 🚀 300ms - faster response (was 500ms)
-                utterance_end_ms=800,  # 🚀 800ms silence = utterance end (was 1200ms)
+                endpointing=200,  # 🚀 200ms - ultra fast response
+                utterance_end_ms=500,  # 🚀 500ms silence = utterance end (max 2s latency)
                 interim_results=True,
                 vad_events=True,
             )
@@ -687,8 +687,8 @@ class RealtimeVoiceSession:
                         # Wait for proper silence
                         time_since_last_audio = time.time() - self.last_audio_time
                         time_since_speech_end = time.time() - self.last_speech_end_time if self.last_speech_end_time else 0
-                        # Need 0.8s of silence to match frontend SILENCE_DURATION (optimized for <1s latency)
-                        if time_since_last_audio > 0.8 and time_since_speech_end > 0.3:
+                        # Need 0.5s of silence to match frontend SILENCE_DURATION (max 2s latency)
+                        if time_since_last_audio > 0.5 and time_since_speech_end > 0.2:
                             logger.info(f"📤 Processing batch audio after {time_since_last_audio:.1f}s silence")
                             await self.process_audio()
                     continue
@@ -725,9 +725,9 @@ class RealtimeVoiceSession:
                         continue
                 else:
                     # No speech_final yet - use shorter timeouts
-                    if time_since_last_audio < 0.8:  # 800ms (was 1.5s)
+                    if time_since_last_audio < 0.5:  # 500ms - fast response
                         continue
-                    if time_since_last_transcript < 0.6:  # 600ms (was 1.2s)
+                    if time_since_last_transcript < 0.4:  # 400ms - fast response
                         continue
 
                 # User truly stopped - process the complete message!
