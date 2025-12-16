@@ -991,7 +991,7 @@ export default function LiveCallPage() {
       let silenceStart = 0;
       let isSpeakingNow = false;
       const SILENCE_THRESHOLD = 0.03; // Audio level threshold for VAD (lower = more sensitive)
-      const SILENCE_DURATION = 600; // ms of silence before marking end of speech (faster response)
+      const SILENCE_DURATION = 1500; // 🎯 1.5s of silence before marking end of speech (was 600ms - too short!)
 
       processor.onaudioprocess = (e) => {
         if (wsRef.current?.readyState === WebSocket.OPEN && !isMutedRef.current) {
@@ -1052,7 +1052,11 @@ export default function LiveCallPage() {
             // Threshold 0 = immediate, otherwise wait for estimated word count
             const shouldBargeIn = wordsThreshold === 0 || estimatedWords >= wordsThreshold;
 
-            if (shouldBargeIn && now - lastBargeInTimeRef.current > 1000) {
+            // 🎯 For immediate mode (threshold=0), use shorter debounce (300ms)
+            // For word threshold mode, use longer debounce (1000ms)
+            const debounceMs = wordsThreshold === 0 ? 300 : 1000;
+
+            if (shouldBargeIn && now - lastBargeInTimeRef.current > debounceMs) {
               console.log(`🛑🛑🛑 BARGE-IN! Duration: ${speechDurationMs}ms, Est. words: ${estimatedWords}, Threshold: ${wordsThreshold} 🛑🛑🛑`);
               lastBargeInTimeRef.current = now;
               speechStartTimeRef.current = null;  // Reset for next utterance
