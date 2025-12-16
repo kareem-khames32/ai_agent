@@ -687,8 +687,8 @@ class RealtimeVoiceSession:
                         # Wait for proper silence
                         time_since_last_audio = time.time() - self.last_audio_time
                         time_since_speech_end = time.time() - self.last_speech_end_time if self.last_speech_end_time else 0
-                        # Need 1.5s of silence to match frontend SILENCE_DURATION
-                        if time_since_last_audio > 1.5 and time_since_speech_end > 0.5:
+                        # Need 0.8s of silence to match frontend SILENCE_DURATION (optimized for <1s latency)
+                        if time_since_last_audio > 0.8 and time_since_speech_end > 0.3:
                             logger.info(f"📤 Processing batch audio after {time_since_last_audio:.1f}s silence")
                             await self.process_audio()
                     continue
@@ -875,8 +875,8 @@ class RealtimeVoiceSession:
         self.is_thinking = True
         self.should_restart_thinking = False
 
-        # 🎯 Wait a bit more to collect any trailing audio
-        await asyncio.sleep(0.3)
+        # 🎯 Wait a bit more to collect any trailing audio (reduced for <1s latency)
+        await asyncio.sleep(0.1)
 
         # 🎯 Check again if user started speaking during the wait
         if self.user_is_speaking:
