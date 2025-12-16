@@ -901,18 +901,9 @@ class RealtimeVoiceSession:
         if self.is_processing:
             return
 
-        # 🎯 Use backchannel detection to skip acknowledgments
-        speech_type = self._classify_speech(transcript)
-        if speech_type == "backchannel":
-            # Check if AI just spoke recently (within 3 seconds)
-            time_since_ai_spoke = time.time() - getattr(self, 'last_ai_speech_time', 0)
-            if time_since_ai_spoke < 3.0:
-                logger.info(f"💬 Ignoring backchannel '{transcript}' (AI just spoke {time_since_ai_spoke:.1f}s ago)")
-                return
-            # Or if there's recent conversation context
-            if len(self.messages) > 0 and self.messages[-1].role == "assistant":
-                logger.info(f"💬 Ignoring backchannel '{transcript}' (last message was AI)")
-                return
+        # 🚫 REMOVED backchannel detection here - it was blocking valid responses!
+        # Backchannels are ONLY ignored in _on_transcript when AI is ACTIVELY speaking
+        # User responding "وعليكم السلام" to AI is a VALID response, not a backchannel
 
         self.is_processing = True
         self.is_thinking = True  # AI is now thinking (not speaking yet)
