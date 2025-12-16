@@ -493,8 +493,8 @@ class RealtimeVoiceSession:
             self.streaming_stt = StreamingSTT(
                 api_key=self.stt_api_key,
                 language=self.language,
-                endpointing=200,  # 🚀 200ms - ultra fast response
-                utterance_end_ms=500,  # 🚀 500ms silence = utterance end (max 2s latency)
+                endpointing=150,  # 🚀 150ms - human-like fast response
+                utterance_end_ms=300,  # 🚀 300ms silence = utterance end
                 interim_results=True,
                 vad_events=True,
             )
@@ -690,8 +690,8 @@ class RealtimeVoiceSession:
                         # Wait for proper silence
                         time_since_last_audio = time.time() - self.last_audio_time
                         time_since_speech_end = time.time() - self.last_speech_end_time if self.last_speech_end_time else 0
-                        # Need 0.5s of silence to match frontend SILENCE_DURATION (max 2s latency)
-                        if time_since_last_audio > 0.5 and time_since_speech_end > 0.2:
+                        # Need 0.3s of silence - human-like fast response
+                        if time_since_last_audio > 0.3 and time_since_speech_end > 0.1:
                             logger.info(f"📤 Processing batch audio after {time_since_last_audio:.1f}s silence")
                             await self.process_audio()
                     continue
@@ -728,9 +728,9 @@ class RealtimeVoiceSession:
                         continue
                 else:
                     # No speech_final yet - use shorter timeouts
-                    if time_since_last_audio < 0.5:  # 500ms - fast response
+                    if time_since_last_audio < 0.3:  # 300ms - human-like fast
                         continue
-                    if time_since_last_transcript < 0.4:  # 400ms - fast response
+                    if time_since_last_transcript < 0.25:  # 250ms - human-like fast
                         continue
 
                 # User truly stopped - process the complete message!
@@ -884,8 +884,8 @@ class RealtimeVoiceSession:
         self.is_thinking = True
         self.should_restart_thinking = False
 
-        # 🎯 Wait a bit more to collect any trailing audio (reduced for <1s latency)
-        await asyncio.sleep(0.1)
+        # 🎯 Minimal wait - human-like fast response
+        await asyncio.sleep(0.05)
 
         # 🎯 Check again if user started speaking during the wait
         if self.user_is_speaking:
