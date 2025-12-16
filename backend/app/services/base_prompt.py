@@ -39,21 +39,13 @@ def get_current_datetime_info(timezone: str = "Africa/Cairo") -> dict:
 
 
 def build_base_system_prompt(timezone: str = "Africa/Cairo", language: str = "ar") -> str:
-    """Build concise base system prompt."""
+    """Build minimal base system prompt for fast LLM response."""
     dt = get_current_datetime_info(timezone)
 
-    # Short and focused base prompt
-    base_prompt = f"""[معلومات المكالمة]
-التاريخ: {dt['day_name']} {dt['day']} {dt['month_name']} {dt['year']} - الساعة: {dt['time']}
+    # 🚀 ULTRA-MINIMAL prompt for fastest first token
+    base_prompt = f"""[الآن: {dt['day_name']} {dt['day']}/{dt['month']} - {dt['time']}]
+مكالمة تليفون حية. كلامك مختصر وطبيعي. لو مش فاهم قول "ممكن تعيد؟"
 
-[قواعد أساسية]
-- أنت في مكالمة تليفون حية، تكلم بشكل طبيعي ومختصر
-- لو الصوت مش واضح قول "معلش مسمعتش، ممكن تعيد؟"
-- تجاهل الضوضاء أو الأصوات العشوائية
-- افتكر كل اللي اتقال في المكالمة
-- احسب الأرقام صح
-
-[تعليمات الوكيل]
 """
     return base_prompt
 

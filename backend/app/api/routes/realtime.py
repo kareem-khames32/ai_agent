@@ -488,7 +488,7 @@ class RealtimeVoiceSession:
         self.audio_buffer: bytes = b""
         self.last_audio_time: float = 0
         self.is_processing = False
-        self.silence_threshold = 0.3  # seconds of silence before processing
+        self.silence_threshold = 0.2  # 🚀 200ms silence - faster response (was 300ms)
         self.min_audio_length = 3200  # minimum bytes before processing
         self.process_task: Optional[asyncio.Task] = None
 
@@ -531,8 +531,8 @@ class RealtimeVoiceSession:
             self.streaming_stt = StreamingSTT(
                 api_key=self.stt_api_key,
                 language=self.language,
-                endpointing=150,  # 🚀 150ms - human-like fast response
-                utterance_end_ms=300,  # 🚀 300ms silence = utterance end
+                endpointing=100,  # 🚀 100ms - ultra fast (was 150ms)
+                utterance_end_ms=200,  # 🚀 200ms silence = utterance end (was 300ms)
                 interim_results=True,
                 vad_events=True,
             )
@@ -841,8 +841,8 @@ class RealtimeVoiceSession:
                             # Wait for proper silence
                             time_since_last_audio = time.time() - self.last_audio_time
                             time_since_speech_end = time.time() - self.last_speech_end_time if self.last_speech_end_time else 0
-                            # Need 0.3s of silence - human-like fast response
-                            if time_since_last_audio > 0.3 and time_since_speech_end > 0.1:
+                            # 🚀 Need 0.2s of silence - ultra fast response (was 0.3s)
+                            if time_since_last_audio > 0.2 and time_since_speech_end > 0.1:
                                 logger.info(f"📤 Processing batch audio after {time_since_last_audio:.1f}s silence")
                                 await self.process_audio()
                     continue
@@ -872,16 +872,16 @@ class RealtimeVoiceSession:
 
                 if self.utterance_complete:
                     # 🚀 Utterance complete - process quickly!
-                    # Small delay to catch any trailing words
-                    if time_since_last_transcript < 0.15:  # 150ms (was 500ms)
+                    # 🚀 Small delay to catch any trailing words
+                    if time_since_last_transcript < 0.1:  # 100ms (was 150ms)
                         continue
-                    if time_since_last_audio < 0.15:  # 150ms (was 500ms)
+                    if time_since_last_audio < 0.1:  # 100ms (was 150ms)
                         continue
                 else:
-                    # No speech_final yet - use shorter timeouts
-                    if time_since_last_audio < 0.3:  # 300ms - human-like fast
+                    # 🚀 No speech_final yet - ultra fast timeouts
+                    if time_since_last_audio < 0.2:  # 200ms (was 300ms)
                         continue
-                    if time_since_last_transcript < 0.25:  # 250ms - human-like fast
+                    if time_since_last_transcript < 0.15:  # 150ms (was 250ms)
                         continue
 
                 # User truly stopped - process the complete message!
@@ -1138,9 +1138,9 @@ class RealtimeVoiceSession:
         last_stream_time = 0  # For throttling text_stream
 
         # Sentence endings - Arabic and English
-        SENTENCE_ENDINGS = ('.', '!', '?', '؟', '。')
-        MIN_CHARS = 10  # Reduced for faster TTS start
-        MAX_WAIT_CHARS = 150  # Force send if no sentence ending found
+        SENTENCE_ENDINGS = ('.', '!', '?', '؟', '。', '،', ',')  # 🚀 Added comma for earlier splits
+        MIN_CHARS = 8  # 🚀 Reduced for faster TTS start (was 10)
+        MAX_WAIT_CHARS = 80  # 🚀 Force send sooner (was 150) - faster first audio
 
         # Don't set is_speaking yet - wait until TTS actually starts
         self.should_stop_speaking = False
