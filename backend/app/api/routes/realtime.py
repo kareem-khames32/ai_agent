@@ -693,18 +693,38 @@ class RealtimeVoiceSession:
 
             # 🎯 Buffer BOTH interim and final results
             # Azure Streaming often doesn't send final results, so we use interim too
+
+            # 🎯 KEY: Check if this is a continuation of previous speech
+            # If user paused briefly (< 1s) and continues, APPEND to existing transcript
+            time_since_last = time.time() - self.last_transcript_time if self.last_transcript_time else 999
+            is_continuation = (
+                time_since_last < 1.0 and  # Within 1 second continuation window
+                self.current_transcript.strip() and  # Have existing text
+                result.text.strip() and  # Have new text
+                not result.text.strip().startswith(self.current_transcript.strip()[:20])  # Not already included
+            )
+
             if result.is_final:
-                # Final result - use it directly (replace any interim)
-                self.current_transcript = result.text
+                # Final result
+                if is_continuation:
+                    # Append to existing (user continued speaking after brief pause)
+                    self.current_transcript = f"{self.current_transcript.strip()} {result.text.strip()}"
+                    logger.info(f"📝 Final (appended): {self.current_transcript}")
+                else:
+                    self.current_transcript = result.text
+                    logger.info(f"📝 Final: {result.text}")
                 self.last_transcript_time = time.time()
                 self.utterance_complete = True
-                logger.info(f"📝 Final: {result.text}")
             else:
                 # Interim result - update current transcript (Azure often only sends these)
-                # Use the full interim text, not append (it already contains full utterance)
-                self.current_transcript = result.text
+                if is_continuation:
+                    # Append to existing (user continued speaking after brief pause)
+                    self.current_transcript = f"{self.current_transcript.strip()} {result.text.strip()}"
+                    logger.info(f"📝 Interim (appended): {self.current_transcript[:50]}...")
+                else:
+                    self.current_transcript = result.text
+                    logger.info(f"📝 Interim buffered: {result.text[:50]}...")
                 self.last_transcript_time = time.time()
-                logger.info(f"📝 Interim buffered: {result.text[:50]}...")
         except Exception as e:
             logger.error(f"❌ Error in _on_transcript: {e}")
 
@@ -879,18 +899,20 @@ class RealtimeVoiceSession:
                     continue
 
                 if self.utterance_complete:
-                    # 🎯 Utterance complete - process with small buffer for trailing words
-                    if time_since_last_transcript < 0.3:  # 300ms buffer
+                    # 🎯 Utterance complete (speech_final from STT)
+                    # Still wait for natural pause to catch continuation
+                    if time_since_last_transcript < 0.5:  # 500ms buffer
                         continue
-                    if time_since_speech_end < 0.3:  # 300ms after speech ended
+                    if time_since_speech_end < 0.6:  # 600ms after speech ended
                         continue
                 else:
                     # 🎯 No speech_final yet - wait longer for natural pause
-                    if time_since_last_audio < 0.6:  # 600ms for audio silence
+                    # Arabic speech has natural pauses of 500-800ms within sentences
+                    if time_since_last_audio < 0.8:  # 800ms for audio silence
                         continue
-                    if time_since_last_transcript < 0.5:  # 500ms for transcript
+                    if time_since_last_transcript < 0.7:  # 700ms for transcript
                         continue
-                    if time_since_speech_end < 0.5:  # 500ms after VAD says speech ended
+                    if time_since_speech_end < 0.8:  # 800ms after VAD says speech ended
                         continue
 
                 # User truly stopped - process the complete message!
