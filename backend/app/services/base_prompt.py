@@ -2,19 +2,29 @@
 Base system prompt builder for voice AI agents.
 Contains essential behaviors that all agents should have.
 """
-from datetime import datetime
-import pytz
+from datetime import datetime, timezone as tz
 from typing import Optional
+
+# Try to use zoneinfo (Python 3.9+), fallback to basic UTC
+try:
+    from zoneinfo import ZoneInfo
+    HAS_ZONEINFO = True
+except ImportError:
+    HAS_ZONEINFO = False
 
 
 def get_current_datetime_info(timezone: str = "Africa/Cairo") -> dict:
     """Get current date/time information for the specified timezone."""
-    try:
-        tz = pytz.timezone(timezone)
-    except pytz.exceptions.UnknownTimeZoneError:
-        tz = pytz.timezone("Africa/Cairo")  # Default fallback
-
-    now = datetime.now(tz)
+    if HAS_ZONEINFO:
+        try:
+            zone = ZoneInfo(timezone)
+            now = datetime.now(zone)
+        except Exception:
+            # Fallback to UTC
+            now = datetime.now(tz.utc)
+    else:
+        # No zoneinfo - use UTC
+        now = datetime.now(tz.utc)
 
     # Arabic day names
     arabic_days = {
