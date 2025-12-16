@@ -243,26 +243,27 @@ class LLMService:
         if not anthropic_messages:
             logger.error("❌ No messages to send to Anthropic!")
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            async with client.stream(
-                "POST",
-                url,
-                headers=headers,
-                json=payload,
-            ) as response:
-                if response.status_code != 200:
-                    error_text = await response.aread()
-                    logger.error(f"❌ Anthropic API error: {response.status_code} - {error_text.decode()}")
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if line.startswith("data: "):
-                        try:
-                            import json
-                            data = json.loads(line[6:])
-                            if data["type"] == "content_block_delta":
-                                yield data["delta"].get("text", "")
-                        except:
-                            continue
+        # 🚀 Use connection pool for faster first-token (reuses TCP connection)
+        client = get_http_client("https://api.anthropic.com")
+        async with client.stream(
+            "POST",
+            url,
+            headers=headers,
+            json=payload,
+        ) as response:
+            if response.status_code != 200:
+                error_text = await response.aread()
+                logger.error(f"❌ Anthropic API error: {response.status_code} - {error_text.decode()}")
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    try:
+                        import json
+                        data = json.loads(line[6:])
+                        if data["type"] == "content_block_delta":
+                            yield data["delta"].get("text", "")
+                    except:
+                        continue
 
     async def _openai_generate(
         self,
@@ -345,25 +346,25 @@ class LLMService:
             "stream": True,
         }
 
-        # Use async with for automatic cleanup - no finally block needed
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            async with client.stream(
-                "POST",
-                url,
-                headers=headers,
-                json=payload,
-            ) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if line.startswith("data: ") and line != "data: [DONE]":
-                        try:
-                            import json
-                            data = json.loads(line[6:])
-                            delta = data["choices"][0].get("delta", {})
-                            if "content" in delta:
-                                yield delta["content"]
-                        except:
-                            continue
+        # 🚀 Use connection pool for faster first-token (reuses TCP connection)
+        client = get_http_client("https://api.openai.com")
+        async with client.stream(
+            "POST",
+            url,
+            headers=headers,
+            json=payload,
+        ) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if line.startswith("data: ") and line != "data: [DONE]":
+                    try:
+                        import json
+                        data = json.loads(line[6:])
+                        delta = data["choices"][0].get("delta", {})
+                        if "content" in delta:
+                            yield delta["content"]
+                    except:
+                        continue
 
     async def _google_generate(
         self,
@@ -487,32 +488,34 @@ class LLMService:
         if system_prompt:
             payload["systemInstruction"] = {"parts": [{"text": system_prompt}]}
 
+        # 🚀 Use connection pool for faster first-token (reuses TCP connection)
+        client = get_http_client("https://generativelanguage.googleapis.com")
+
         # Retry loop for rate limiting
         last_error = None
         for attempt in range(MAX_RETRIES):
             try:
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    async with client.stream(
-                        "POST",
-                        url,
-                        headers=headers,
-                        params=params,
-                        json=payload,
-                    ) as response:
-                        response.raise_for_status()
-                        async for line in response.aiter_lines():
-                            if line.startswith("data: "):
-                                try:
-                                    import json
-                                    data = json.loads(line[6:])
-                                    if "candidates" in data:
-                                        parts = data["candidates"][0].get("content", {}).get("parts", [])
-                                        for part in parts:
-                                            if "text" in part:
-                                                yield part["text"]
-                                except:
-                                    continue
-                        return  # Success, exit retry loop
+                async with client.stream(
+                    "POST",
+                    url,
+                    headers=headers,
+                    params=params,
+                    json=payload,
+                ) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if line.startswith("data: "):
+                            try:
+                                import json
+                                data = json.loads(line[6:])
+                                if "candidates" in data:
+                                    parts = data["candidates"][0].get("content", {}).get("parts", [])
+                                    for part in parts:
+                                        if "text" in part:
+                                            yield part["text"]
+                            except:
+                                continue
+                    return  # Success, exit retry loop
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 429:
                     last_error = e
@@ -609,24 +612,25 @@ class LLMService:
             "stream": True,
         }
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            async with client.stream(
-                "POST",
-                url,
-                headers=headers,
-                json=payload,
-            ) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if line.startswith("data: ") and line != "data: [DONE]":
-                        try:
-                            import json
-                            data = json.loads(line[6:])
-                            delta = data["choices"][0].get("delta", {})
-                            if "content" in delta:
-                                yield delta["content"]
-                        except:
-                            continue
+        # 🚀 Use connection pool for faster first-token (reuses TCP connection)
+        client = get_http_client("https://api.groq.com")
+        async with client.stream(
+            "POST",
+            url,
+            headers=headers,
+            json=payload,
+        ) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if line.startswith("data: ") and line != "data: [DONE]":
+                    try:
+                        import json
+                        data = json.loads(line[6:])
+                        delta = data["choices"][0].get("delta", {})
+                        if "content" in delta:
+                            yield delta["content"]
+                    except:
+                        continue
 
     # ============== Together AI (OpenAI-compatible) ==============
 
@@ -711,21 +715,22 @@ class LLMService:
             "stream": True,
         }
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            async with client.stream(
-                "POST",
-                url,
-                headers=headers,
-                json=payload,
-            ) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if line.startswith("data: ") and line != "data: [DONE]":
-                        try:
-                            import json
-                            data = json.loads(line[6:])
-                            delta = data["choices"][0].get("delta", {})
-                            if "content" in delta:
-                                yield delta["content"]
-                        except:
-                            continue
+        # 🚀 Use connection pool for faster first-token (reuses TCP connection)
+        client = get_http_client("https://api.together.xyz")
+        async with client.stream(
+            "POST",
+            url,
+            headers=headers,
+            json=payload,
+        ) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if line.startswith("data: ") and line != "data: [DONE]":
+                    try:
+                        import json
+                        data = json.loads(line[6:])
+                        delta = data["choices"][0].get("delta", {})
+                        if "content" in delta:
+                            yield delta["content"]
+                    except:
+                        continue
