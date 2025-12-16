@@ -734,6 +734,7 @@ export default function LiveCallPage() {
           case "speaking":
             setIsThinking(false);
             setIsAISpeaking(true);
+            isAISpeakingRef.current = true;  // 🎯 Update ref IMMEDIATELY (not waiting for useEffect)
             // Reset interrupted flag - AI is speaking
             audioInterruptedRef.current = false;
             break;
@@ -1026,16 +1027,26 @@ export default function LiveCallPage() {
           // Check if we're in "speaking" mode (either voice detected or within grace period)
           const isInSpeakingMode = hasVoice || (now - lastVoiceTimeRef.current < VOICE_GRACE_PERIOD_MS);
 
+          // 🔍 Debug: Log barge-in conditions every 500ms
+          if (hasVoice && chunkCount % 20 === 0) {
+            console.log(`🔍 Barge-in check: hasVoice=${hasVoice}, isAISpeaking=${isAISpeakingRef.current}, enabled=${enabled}, threshold=${wordsThreshold}`);
+          }
+
           if (isInSpeakingMode && isAISpeakingRef.current && enabled) {
             // Track speech start time
             if (speechStartTimeRef.current === null) {
               speechStartTimeRef.current = now;
-              console.log("🎤 Started tracking speech for word estimation");
+              console.log(`🎤 Started tracking speech | AI speaking: ${isAISpeakingRef.current} | Threshold: ${wordsThreshold}`);
             }
 
             // Calculate estimated word count based on speech duration
             const speechDurationMs = now - speechStartTimeRef.current;
             const estimatedWords = Math.floor((speechDurationMs / 1000) * WORDS_PER_SECOND);
+
+            // Log progress every 500ms
+            if (speechDurationMs > 0 && Math.floor(speechDurationMs / 500) !== Math.floor((speechDurationMs - 50) / 500)) {
+              console.log(`📊 Speech: ${speechDurationMs}ms = ~${estimatedWords} words (need ${wordsThreshold})`);
+            }
 
             // Check if we should trigger barge-in
             // Threshold 0 = immediate, otherwise wait for estimated word count
@@ -1139,12 +1150,14 @@ export default function LiveCallPage() {
     if (audioQueueRef.current.length === 0) {
       isPlayingRef.current = false;
       setIsAISpeaking(false);
+      isAISpeakingRef.current = false;  // 🎯 Update ref immediately
       return;
     }
 
     const item = audioQueueRef.current.shift()!;
     isPlayingRef.current = true;
     setIsAISpeaking(true);
+    isAISpeakingRef.current = true;  // 🎯 Update ref immediately for barge-in detection
 
     // 🎯 Tell backend this audio chunk is NOW playing (for accurate history)
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -1236,6 +1249,7 @@ export default function LiveCallPage() {
     audioQueueRef.current = [];
     isPlayingRef.current = false;
     setIsAISpeaking(false);
+    isAISpeakingRef.current = false;  // 🎯 Update ref immediately
 
     console.log("🔇 Audio queue cleared, playback stopped, interrupted flag set");
   };
