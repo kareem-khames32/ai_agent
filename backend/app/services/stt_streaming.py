@@ -28,10 +28,10 @@ class StreamingSTT:
         language: str = "ar",
         sample_rate: int = 16000,
         encoding: str = "linear16",
-        # Endpointing settings - balanced for accuracy and latency
-        endpointing: int = 400,  # ms - slightly longer to avoid cutting mid-sentence
+        # 🚀 Endpointing settings - OPTIMIZED for low latency
+        endpointing: int = 300,  # ms - fast response (was 400)
         interim_results: bool = True,
-        utterance_end_ms: int = 1500,  # ms - wait longer for complete utterances
+        utterance_end_ms: int = 800,  # ms - quick utterance end detection (was 1500)
         vad_events: bool = True,
     ):
         self.api_key = api_key

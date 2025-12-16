@@ -169,6 +169,7 @@ export default function LiveCallPage() {
   const lastBargeInTimeRef = React.useRef(0);  // Debounce barge-in signals
   const interruptionSettingsRef = React.useRef({ enabled: true, wordsThreshold: 0 });  // Interruption settings
   const speechStartTimeRef = React.useRef<number | null>(null);  // When user started speaking (for word estimation)
+  const lastVoiceTimeRef = React.useRef<number>(0);  // When we last detected voice (for grace period)
 
   // Latency tracking refs
   const speechEndTimeRef = React.useRef<number | null>(null); // When user stops speaking
@@ -1014,11 +1015,18 @@ export default function LiveCallPage() {
           // Use speech DURATION to estimate word count (works with ALL STT providers including Azure batch)
           // Average speaking rate: ~2.5 words/second (150 words/minute)
           const WORDS_PER_SECOND = 2.5;
+          const VOICE_GRACE_PERIOD_MS = 300;  // 300ms grace period for natural speech pauses
           const { enabled, wordsThreshold } = interruptionSettingsRef.current;
+          const now = Date.now();
 
-          if (hasVoice && isAISpeakingRef.current && enabled) {
-            const now = Date.now();
+          if (hasVoice) {
+            lastVoiceTimeRef.current = now;  // Update last voice time
+          }
 
+          // Check if we're in "speaking" mode (either voice detected or within grace period)
+          const isInSpeakingMode = hasVoice || (now - lastVoiceTimeRef.current < VOICE_GRACE_PERIOD_MS);
+
+          if (isInSpeakingMode && isAISpeakingRef.current && enabled) {
             // Track speech start time
             if (speechStartTimeRef.current === null) {
               speechStartTimeRef.current = now;
@@ -1042,8 +1050,8 @@ export default function LiveCallPage() {
               // Immediately stop audio on frontend
               clearAudioQueue();
             }
-          } else if (!hasVoice) {
-            // Reset speech tracking when not speaking
+          } else if (!isInSpeakingMode) {
+            // Only reset after grace period expires
             speechStartTimeRef.current = null;
           }
 
@@ -1063,6 +1071,8 @@ export default function LiveCallPage() {
                 isSpeakingNow = true;
                 setIsSpeaking(true);
                 console.log("🎤 Speech started");
+                // 🎯 Notify backend about speech start (for batch STT providers)
+                wsRef.current.send(JSON.stringify({ type: "speech_start" }));
               }
 
               chunkCount++;

@@ -490,8 +490,8 @@ class RealtimeVoiceSession:
             self.streaming_stt = StreamingSTT(
                 api_key=self.stt_api_key,
                 language=self.language,
-                endpointing=500,  # 500ms - give user time to continue
-                utterance_end_ms=1200,  # 1.2s silence = utterance end (longer for natural pauses)
+                endpointing=300,  # 🚀 300ms - faster response (was 500ms)
+                utterance_end_ms=800,  # 🚀 800ms silence = utterance end (was 1200ms)
                 interim_results=True,
                 vad_events=True,
             )
@@ -663,11 +663,16 @@ class RealtimeVoiceSession:
         """
         Collect ALL user speech and process only after complete silence.
         This ensures the AI responds to the full message, not fragments.
+
+        🚀 OPTIMIZED for low latency:
+        - Fast polling (50ms)
+        - Quick response after utterance end (200ms)
+        - Balanced for speech combination
         """
         try:
             while True:
-                # Poll every 200ms for faster response
-                await asyncio.sleep(0.2)
+                # 🚀 Fast polling for responsive feel
+                await asyncio.sleep(0.05)  # 50ms polling (was 200ms)
 
                 # Check if there's buffered transcript to process
                 transcript = self.current_transcript.strip()
@@ -678,7 +683,7 @@ class RealtimeVoiceSession:
                     if len(self.audio_buffer) > self.min_audio_length and not self.is_processing:
                         # Wait for user to stop speaking
                         time_since_last_audio = time.time() - self.last_audio_time
-                        if time_since_last_audio > 1.2:  # Same as streaming timeout
+                        if time_since_last_audio > 0.6:  # 600ms silence (was 1.2s)
                             await self.process_audio()
                     continue
 
@@ -702,22 +707,21 @@ class RealtimeVoiceSession:
                     continue
 
                 # 🎯 Wait for utterance to be complete (speech_final from Deepgram)
-                # This is more reliable than just timeouts
                 time_since_last_audio = time.time() - self.last_audio_time
                 time_since_last_transcript = time.time() - self.last_transcript_time
 
                 if self.utterance_complete:
-                    # Deepgram says utterance is complete - but wait a bit more
-                    # in case user continues speaking (they might pause mid-sentence)
-                    if time_since_last_transcript < 0.5:  # Wait 0.5s after speech_final
+                    # 🚀 Utterance complete - process quickly!
+                    # Small delay to catch any trailing words
+                    if time_since_last_transcript < 0.15:  # 150ms (was 500ms)
                         continue
-                    if time_since_last_audio < 0.5:  # Also check audio
+                    if time_since_last_audio < 0.15:  # 150ms (was 500ms)
                         continue
                 else:
-                    # No speech_final yet - use longer timeouts as fallback
-                    if time_since_last_audio < 1.5:  # Wait for audio to stop
+                    # No speech_final yet - use shorter timeouts
+                    if time_since_last_audio < 0.8:  # 800ms (was 1.5s)
                         continue
-                    if time_since_last_transcript < 1.2:  # Wait for transcript to settle
+                    if time_since_last_transcript < 0.6:  # 600ms (was 1.2s)
                         continue
 
                 # User truly stopped - process the complete message!
@@ -2267,10 +2271,24 @@ async def realtime_voice_websocket(
                         logger.info(f"🎙️ Audio buffer: {len(session.audio_buffer) // 1000}KB")
                     await session.add_audio_chunk(audio_data)
 
+                elif msg_type == "speech_start" and session:
+                    # 🎤 Client detected start of speech (from frontend VAD)
+                    # This is important for batch STT providers (Azure, Groq, etc.)
+                    session.user_is_speaking = True
+                    session.speech_start_time = time.time()
+                    logger.info("🎤 Speech started (frontend VAD)")
+
                 elif msg_type == "speech_end" and session:
-                    # Client detected end of speech - process immediately
-                    logger.info(f"🔇 Speech ended - processing {len(session.audio_buffer)} bytes")
-                    if len(session.audio_buffer) > session.min_audio_length:
+                    # Client detected end of speech - mark and maybe process
+                    session.user_is_speaking = False
+                    session.last_speech_end_time = time.time()
+                    logger.info(f"🔇 Speech ended - buffer: {len(session.audio_buffer)} bytes")
+
+                    # For batch STT (Azure, etc.) - process after silence
+                    # But only if we have enough audio and not already processing
+                    if (len(session.audio_buffer) > session.min_audio_length and
+                        not session.is_processing and
+                        not session.current_transcript.strip()):  # No streaming transcript
                         await session.process_audio()
 
                 elif msg_type == "barge_in" and session:
