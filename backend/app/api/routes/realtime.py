@@ -505,6 +505,7 @@ class RealtimeVoiceSession:
         self.streaming_stt: Optional[StreamingSTT] = None
         self.azure_streaming_stt: Optional[AzureStreamingSTT] = None if HAS_AZURE_STREAMING else None
         self.current_transcript = ""  # Accumulated transcript (all speech until processed)
+        self._last_processed_transcript = ""  # Track last processed to prevent duplicates
         self.speech_start_time: float = 0  # When user started speaking
         self.last_speech_end_time: float = 0  # When last speech ended
         self.last_transcript_time: float = 0  # When last transcript was received (more reliable)
@@ -884,6 +885,13 @@ class RealtimeVoiceSession:
                         continue
 
                 # User truly stopped - process the complete message!
+                # 🎯 Prevent duplicate processing of same message
+                if hasattr(self, '_last_processed_transcript') and self._last_processed_transcript == transcript:
+                    logger.debug(f"⏭️ Skipping duplicate transcript: '{transcript[:30]}...'")
+                    self.current_transcript = ""  # Clear buffer
+                    continue
+
+                self._last_processed_transcript = transcript  # Track what we processed
                 self.current_transcript = ""  # Clear buffer
                 self.utterance_complete = False  # Reset for next utterance
                 logger.info(f"📝 Processing complete message: '{transcript}'")
