@@ -814,18 +814,26 @@ class RealtimeVoiceSession:
 
                 # Skip if nothing to process or AI is busy
                 if not transcript:
-                    # For batch STT (Azure, etc.) - wait for silence before processing
-                    if len(self.audio_buffer) > self.min_audio_length and not self.is_processing:
-                        # 🎯 Make sure user is NOT speaking
-                        if self.user_is_speaking:
-                            continue
-                        # Wait for proper silence
-                        time_since_last_audio = time.time() - self.last_audio_time
-                        time_since_speech_end = time.time() - self.last_speech_end_time if self.last_speech_end_time else 0
-                        # Need 0.3s of silence - human-like fast response
-                        if time_since_last_audio > 0.3 and time_since_speech_end > 0.1:
-                            logger.info(f"📤 Processing batch audio after {time_since_last_audio:.1f}s silence")
-                            await self.process_audio()
+                    # 🎯 ONLY use batch STT if streaming STT is NOT active
+                    # This prevents double-processing (streaming + batch)
+                    streaming_active = (
+                        (self.streaming_stt and self.streaming_stt.is_connected) or
+                        (self.azure_streaming_stt and self.azure_streaming_stt.is_connected)
+                    )
+
+                    if not streaming_active:
+                        # Batch STT fallback - only when no streaming
+                        if len(self.audio_buffer) > self.min_audio_length and not self.is_processing:
+                            # 🎯 Make sure user is NOT speaking
+                            if self.user_is_speaking:
+                                continue
+                            # Wait for proper silence
+                            time_since_last_audio = time.time() - self.last_audio_time
+                            time_since_speech_end = time.time() - self.last_speech_end_time if self.last_speech_end_time else 0
+                            # Need 0.3s of silence - human-like fast response
+                            if time_since_last_audio > 0.3 and time_since_speech_end > 0.1:
+                                logger.info(f"📤 Processing batch audio after {time_since_last_audio:.1f}s silence")
+                                await self.process_audio()
                     continue
 
                 # If user is still speaking (VAD), keep buffering
