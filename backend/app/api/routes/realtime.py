@@ -23,6 +23,13 @@ from app.services.tts import TTSService
 from app.services.stt_streaming import StreamingSTT, SentenceBuffer, TranscriptResult
 from app.services.base_prompt import combine_prompts
 
+# Try to import Azure Streaming STT
+try:
+    from app.services.azure_stt_streaming import AzureStreamingSTT, AzureTranscriptResult
+    HAS_AZURE_STREAMING = True
+except ImportError:
+    HAS_AZURE_STREAMING = False
+
 
 # Suppress GeneratorExit RuntimeError - it's a warning, not a real error
 def _handle_exception(loop, context):
@@ -470,6 +477,7 @@ class RealtimeVoiceSession:
 
         # 🚀 STREAMING STT - Real-time transcription
         self.streaming_stt: Optional[StreamingSTT] = None
+        self.azure_streaming_stt: Optional[AzureStreamingSTT] = None if HAS_AZURE_STREAMING else None
         self.current_transcript = ""  # Accumulated transcript (all speech until processed)
         self.speech_start_time: float = 0  # When user started speaking
         self.last_speech_end_time: float = 0  # When last speech ended
@@ -489,7 +497,9 @@ class RealtimeVoiceSession:
         self.unspoken_text: str = ""  # Text AI wanted to say but was interrupted
 
     async def init_streaming_stt(self):
-        """Initialize streaming STT connection"""
+        """Initialize streaming STT connection - supports Deepgram and Azure"""
+
+        # 🎯 Deepgram Streaming STT
         if self.stt_provider == "deepgram" and self.stt_api_key:
             self.streaming_stt = StreamingSTT(
                 api_key=self.stt_api_key,
@@ -508,8 +518,39 @@ class RealtimeVoiceSession:
             # Connect
             connected = await self.streaming_stt.connect()
             if connected:
-                logger.info("🎤 Streaming STT initialized")
+                logger.info("🎤 Deepgram Streaming STT initialized")
             return connected
+
+        # 🎯 Azure Streaming STT
+        elif self.stt_provider == "azure" and self.stt_api_key and HAS_AZURE_STREAMING:
+            self.azure_streaming_stt = AzureStreamingSTT(
+                api_key=self.stt_api_key,
+                region=self.stt_region or "eastus",
+                language=self.language if "-" in self.language else f"{self.language}-SA",
+                sample_rate=16000,
+            )
+
+            # Set callbacks - wrap to convert AzureTranscriptResult to TranscriptResult
+            async def on_azure_transcript(result: AzureTranscriptResult):
+                # Convert to common format
+                common_result = TranscriptResult(
+                    text=result.text,
+                    is_final=result.is_final,
+                    confidence=result.confidence,
+                    speech_final=result.is_final,  # Azure uses is_final for utterance end
+                )
+                await self._on_transcript(common_result)
+
+            self.azure_streaming_stt.on_transcript = on_azure_transcript
+            self.azure_streaming_stt.on_speech_started = self._on_speech_started
+            self.azure_streaming_stt.on_speech_ended = self._on_speech_ended
+
+            # Connect
+            connected = await self.azure_streaming_stt.connect()
+            if connected:
+                logger.info("🎤 Azure Streaming STT initialized")
+            return connected
+
         return False
 
     async def _on_transcript(self, result: TranscriptResult):
@@ -642,9 +683,13 @@ class RealtimeVoiceSession:
         """Send audio chunk to streaming STT (real-time transcription)"""
         self.last_audio_time = time.time()
 
-        # 🚀 Send directly to streaming STT
+        # 🚀 Send to Deepgram streaming STT
         if self.streaming_stt and self.streaming_stt.is_connected:
             await self.streaming_stt.send_audio(audio_data)
+
+        # 🚀 Send to Azure streaming STT
+        if self.azure_streaming_stt and self.azure_streaming_stt.is_connected:
+            await self.azure_streaming_stt.send_audio(audio_data)
 
         # Save for recording BEFORE adding to buffer
         if self.recording_enabled and len(audio_data) > 0:
@@ -2049,10 +2094,15 @@ class RealtimeVoiceSession:
         if self.process_task:
             self.process_task.cancel()
 
-        # Close streaming STT
+        # Close streaming STT (Deepgram)
         if self.streaming_stt:
             await self.streaming_stt.close()
-            logger.info("🔌 Streaming STT closed")
+            logger.info("🔌 Deepgram Streaming STT closed")
+
+        # Close Azure streaming STT
+        if self.azure_streaming_stt:
+            await self.azure_streaming_stt.close()
+            logger.info("🔌 Azure Streaming STT closed")
 
     def generate_waveform_data(self, samples_per_segment: int = 100) -> list[dict]:
         """Generate waveform data for visualization from recording segments"""
