@@ -458,6 +458,29 @@ class RealtimeVoiceSession:
         self.should_stop_speaking = False  # Should we stop TTS?
         self.audio_only_stop = False  # True = stop TTS only, continue LLM (VAPI style)
 
+        # 🎯 Backchannel detection - VAPI style
+        # Backchannels = user acknowledging (ignore, don't interrupt)
+        # Interruptions = user wants to stop AI (interrupt immediately)
+        self.backchannel_phrases = {
+            # Arabic acknowledgments
+            "آه", "أه", "اه", "ايوه", "ايوا", "أيوه", "تمام", "طيب", "ماشي", "حاضر",
+            "نعم", "اي", "صح", "بالظبط", "فاهم", "فاهمك", "اوك", "اوكي",
+            # Greetings (shouldn't interrupt AI mid-response)
+            "عليكم السلام", "وعليكم السلام", "السلام عليكم", "اهلا", "مرحبا",
+            # English acknowledgments
+            "ok", "okay", "yes", "yeah", "yep", "uh huh", "mm", "mmm", "hmm",
+            "right", "sure", "got it", "i see", "alright",
+        }
+        self.interruption_phrases = {
+            # Arabic explicit interruptions
+            "لا", "لأ", "استنى", "وقف", "مش كده", "غلط", "لحظة", "بس", "خلاص",
+            "اسكت", "سكوت", "توقف", "مش صح", "انتظر", "ثانية",
+            # English explicit interruptions
+            "no", "wait", "stop", "hold on", "that's wrong", "not right",
+            "one second", "hang on", "pause",
+        }
+        self.first_audio_sent_this_turn = False  # Track if we sent first audio chunk
+
         self.messages: list[Message] = []
         self.audio_buffer: bytes = b""
         self.last_audio_time: float = 0
@@ -553,57 +576,116 @@ class RealtimeVoiceSession:
 
         return False
 
+    def _classify_speech(self, text: str) -> str:
+        """
+        🎯 VAPI-style backchannel detection
+        Classify user speech as: 'backchannel', 'interruption', or 'normal'
+
+        - backchannel: user acknowledging (آه، تمام) → IGNORE, don't interrupt AI
+        - interruption: user wants to stop (لا، استنى) → INTERRUPT immediately
+        - normal: regular speech → use word threshold
+        """
+        if not text:
+            return "normal"
+
+        # Clean text for comparison
+        clean = text.strip().lower()
+        # Remove punctuation
+        for char in '.؟?!،,':
+            clean = clean.replace(char, '')
+        clean = clean.strip()
+
+        # Check for explicit interruption FIRST (takes priority)
+        for phrase in self.interruption_phrases:
+            if phrase in clean or clean == phrase:
+                logger.info(f"🛑 Classified as INTERRUPTION: '{text}'")
+                return "interruption"
+
+        # Check for backchannel (acknowledgment)
+        for phrase in self.backchannel_phrases:
+            if phrase in clean or clean == phrase:
+                logger.info(f"💬 Classified as BACKCHANNEL: '{text}'")
+                return "backchannel"
+
+        # Normal speech
+        return "normal"
+
     async def _on_transcript(self, result: TranscriptResult):
-        """Handle transcript from streaming STT - BUFFER ONLY, don't process yet"""
+        """Handle transcript from streaming STT with BACKCHANNEL DETECTION"""
         try:
             # 🔍 Debug: Always log transcript info
             word_count = len(result.text.strip().split()) if result.text.strip() else 0
-            logger.info(f"📝 Transcript: '{result.text[:40]}...' | words={word_count} | is_final={result.is_final} | threshold={self.interruption_words_threshold}")
+            logger.info(f"📝 Transcript: '{result.text[:50]}' | words={word_count} | final={result.is_final}")
 
-            # 🎯 Word-threshold based interruption
-            # Count words and trigger interruption when threshold is reached
-            if self.interruption_enabled and self.interruption_words_threshold > 0:
-                self.interrupt_word_count = max(self.interrupt_word_count, word_count)
+            # 🎯 VAPI-style backchannel detection
+            speech_type = self._classify_speech(result.text)
 
-                # Debug log
-                logger.info(f"🔢 Words: {self.interrupt_word_count}/{self.interruption_words_threshold} | speaking={self.is_speaking} | thinking={self.is_thinking} | stopped={self.should_stop_speaking}")
+            # If AI is speaking or thinking, handle interruption
+            if self.interruption_enabled and (self.is_speaking or self.is_thinking):
+                if speech_type == "backchannel":
+                    # 💬 BACKCHANNEL - Ignore completely, don't interrupt
+                    logger.info(f"💬 Backchannel detected: '{result.text}' - IGNORING (AI continues)")
+                    # Don't buffer this, don't interrupt - just ignore
+                    return
 
-                # Check if we've reached the threshold and haven't interrupted yet
-                if (self.interrupt_word_count >= self.interruption_words_threshold and
-                    (self.is_speaking or self.is_thinking) and
-                    not self.should_stop_speaking):
+                elif speech_type == "interruption":
+                    # 🛑 EXPLICIT INTERRUPTION - Stop immediately
+                    if not self.should_stop_speaking:
+                        if self.is_speaking:
+                            self.should_stop_speaking = True
+                            self.audio_only_stop = True
+                            logger.info(f"🛑 EXPLICIT INTERRUPTION: '{result.text}' - stopping AUDIO")
+                            await self.client_ws.send_json({"type": "stop_audio"})
+                        elif self.is_thinking:
+                            self.should_stop_speaking = True
+                            self.audio_only_stop = False
+                            self.should_restart_thinking = True
+                            logger.info(f"🛑 EXPLICIT INTERRUPTION: '{result.text}' - restarting THINKING")
+                            await self.client_ws.send_json({"type": "interrupted"})
 
-                    if self.is_speaking:
-                        # AI is speaking → stop audio only, continue LLM
-                        self.should_stop_speaking = True
-                        self.audio_only_stop = True
-                        logger.info(f"🛑 Word-threshold ({self.interrupt_word_count}/{self.interruption_words_threshold}) reached: stopping AUDIO only")
-                        await self.client_ws.send_json({"type": "stop_audio"})
-                    elif self.is_thinking:
-                        # AI is thinking → restart with new input
-                        self.should_stop_speaking = True
-                        self.audio_only_stop = False
-                        self.should_restart_thinking = True
-                        logger.info(f"🛑 Word-threshold ({self.interrupt_word_count}/{self.interruption_words_threshold}) reached: restarting THINKING")
-                        await self.client_ws.send_json({"type": "interrupted"})
-            elif self.interruption_words_threshold == 0 and self.interruption_enabled:
-                # Log that we're in immediate mode
-                pass  # Immediate mode is handled in _on_speech_started
+                else:
+                    # 🎯 NORMAL SPEECH - Use word threshold
+                    self.interrupt_word_count = max(self.interrupt_word_count, word_count)
+
+                    # Only interrupt if we've reached word threshold AND first audio was sent
+                    should_interrupt = (
+                        self.interruption_words_threshold == 0 or  # Immediate mode
+                        self.interrupt_word_count >= self.interruption_words_threshold
+                    )
+
+                    # 🎯 KEY FIX: Only interrupt if first audio was actually sent!
+                    # This ensures user gets to hear at least some response
+                    if should_interrupt and self.first_audio_sent_this_turn and not self.should_stop_speaking:
+                        if self.is_speaking:
+                            self.should_stop_speaking = True
+                            self.audio_only_stop = True
+                            logger.info(f"🛑 Word-threshold ({self.interrupt_word_count}) reached: stopping AUDIO")
+                            await self.client_ws.send_json({"type": "stop_audio"})
+                        elif self.is_thinking:
+                            self.should_stop_speaking = True
+                            self.audio_only_stop = False
+                            self.should_restart_thinking = True
+                            logger.info(f"🛑 Word-threshold ({self.interrupt_word_count}) reached: restarting THINKING")
+                            await self.client_ws.send_json({"type": "interrupted"})
 
             if result.is_final:
-                self.current_transcript += " " + result.text
-                self.last_transcript_time = time.time()  # Track when we got this
-                # 🎯 speech_final means the ENTIRE utterance is complete (user stopped talking)
-                if result.speech_final:
-                    self.utterance_complete = True
-                    logger.info(f"📝 Utterance complete: {result.text}")
+                # Don't buffer backchannels - they're not real input
+                if speech_type != "backchannel":
+                    self.current_transcript += " " + result.text
+                    self.last_transcript_time = time.time()
+                    # 🎯 speech_final means the ENTIRE utterance is complete
+                    if result.speech_final:
+                        self.utterance_complete = True
+                        logger.info(f"📝 Utterance complete: {result.text}")
+                    else:
+                        logger.info(f"📝 Buffered: {result.text}")
                 else:
-                    logger.info(f"📝 Buffered: {result.text}")
+                    logger.info(f"💬 Backchannel not buffered: '{result.text}'")
         except Exception as e:
             logger.error(f"❌ Error in _on_transcript: {e}")
 
     async def _on_speech_started(self):
-        """User started speaking"""
+        """User started speaking - DON'T interrupt immediately, wait for transcript"""
         try:
             self.speech_start_time = time.time()
             self.user_is_speaking = True
@@ -611,26 +693,17 @@ class RealtimeVoiceSession:
             self.interrupt_word_count = 0  # Reset word counter for new speech
             await self.client_ws.send_json({"type": "speech_started"})
 
-            # VAPI-style interruption:
-            # - If threshold is 0 → immediate interruption
-            # - If threshold > 0 → wait for N words before interrupting (handled in _on_transcript)
-            if self.interruption_enabled and self.interruption_words_threshold == 0:
-                if self.is_speaking:
-                    # AI is speaking → stop audio only, continue LLM (like VAPI)
-                    self.should_stop_speaking = True
-                    self.audio_only_stop = True  # Signal: stop TTS but continue LLM
-                    # DON'T set should_restart_thinking - let AI finish response in background
-                    logger.info(f"🛑 Barge-in: stopping AUDIO only (speaking=True)")
-                    await self.client_ws.send_json({"type": "stop_audio"})  # Tell frontend to stop audio
-                elif self.is_thinking:
-                    # AI is still thinking → restart with new input
-                    self.should_stop_speaking = True
-                    self.audio_only_stop = False  # Full stop
-                    self.should_restart_thinking = True
-                    logger.info(f"🛑 Barge-in: restarting THINKING (thinking=True)")
-                    await self.client_ws.send_json({"type": "interrupted"})
-            elif self.interruption_enabled and self.interruption_words_threshold > 0:
-                logger.info(f"🎯 Speech started - waiting for {self.interruption_words_threshold} words before interruption")
+            # 🎯 VAPI-style: Don't interrupt immediately on speech start
+            # Wait for transcript to determine if it's a backchannel or real interruption
+            # The _on_transcript method will handle interruption based on:
+            # - Backchannel (آه، تمام) → Ignore
+            # - Explicit interruption (لا، استنى) → Stop immediately
+            # - Normal speech → Use word threshold
+
+            if self.is_speaking or self.is_thinking:
+                logger.info(f"🎤 Speech started while AI busy - waiting for transcript to classify")
+            else:
+                logger.info(f"🎤 Speech started - AI not busy, will process as normal")
         except Exception as e:
             logger.error(f"❌ Error in _on_speech_started: {e}")
 
@@ -792,29 +865,22 @@ class RealtimeVoiceSession:
             import traceback
             traceback.print_exc()
 
-    # Filler words to ignore (user just saying "hello?" while waiting)
-    FILLER_WORDS = {
-        "الو", "ألو", "هلو", "ايوه", "ايوا", "اه", "آه", "نعم", "اي",
-        "ها", "هاه", "مم", "امم", "طيب", "اوك", "اوكي", "ok", "okay",
-        "hello", "hi", "yes", "yeah", "alo", "halo"
-    }
-
     async def process_transcript(self, transcript: str):
         """Process transcript from streaming STT - FAST PATH with smart re-thinking"""
         if self.is_processing:
             return
 
-        # Check if this is just a filler word (user waiting/acknowledging)
-        clean_transcript = transcript.strip().lower().replace(".", "").replace("؟", "").replace("?", "")
-        if clean_transcript in self.FILLER_WORDS:
+        # 🎯 Use backchannel detection to skip acknowledgments
+        speech_type = self._classify_speech(transcript)
+        if speech_type == "backchannel":
             # Check if AI just spoke recently (within 3 seconds)
             time_since_ai_spoke = time.time() - getattr(self, 'last_ai_speech_time', 0)
             if time_since_ai_spoke < 3.0:
-                logger.info(f"🔇 Ignoring filler word '{transcript}' (AI just spoke {time_since_ai_spoke:.1f}s ago)")
+                logger.info(f"💬 Ignoring backchannel '{transcript}' (AI just spoke {time_since_ai_spoke:.1f}s ago)")
                 return
             # Or if there's recent conversation context
             if len(self.messages) > 0 and self.messages[-1].role == "assistant":
-                logger.info(f"🔇 Ignoring filler word '{transcript}' (last message was AI)")
+                logger.info(f"💬 Ignoring backchannel '{transcript}' (last message was AI)")
                 return
 
         self.is_processing = True
@@ -1049,8 +1115,9 @@ class RealtimeVoiceSession:
         # Don't set is_speaking yet - wait until TTS actually starts
         self.should_stop_speaking = False
 
-        # 🎯 Reset sequence tracking for this new response
+        # 🎯 Reset sequence tracking and first audio flag for this new response
         self.reset_sequence_tracking()
+        self.first_audio_sent_this_turn = False  # Reset for new turn
 
         # Sentence queue for ordered TTS
         sentence_queue: asyncio.Queue[str | None] = asyncio.Queue()
@@ -1059,14 +1126,17 @@ class RealtimeVoiceSession:
         spoken_sentences: list[str] = []  # Track sentences that were sent (backup)
 
         async def tts_worker():
-            """Process TTS in order"""
+            """Process TTS in order - ALWAYS send first audio before checking interruption"""
             nonlocal first_audio_sent, spoken_sentences
             seq = 0
 
-            while not self.should_stop_speaking:
+            while True:  # Changed from 'not self.should_stop_speaking' to always process first chunk
                 try:
                     text = await asyncio.wait_for(sentence_queue.get(), timeout=0.05)
                 except asyncio.TimeoutError:
+                    # Check if we should exit ONLY after first audio was sent
+                    if self.should_stop_speaking and self.first_audio_sent_this_turn:
+                        break
                     continue
 
                 if text is None:
@@ -1086,15 +1156,14 @@ class RealtimeVoiceSession:
                     # Get MP3 for playback
                     audio_mp3 = await self.tts.synthesize(text.strip(), output_format="mp3")
 
-                    # Check IMMEDIATELY after synthesis if we should stop
-                    if self.should_stop_speaking:
-                        logger.info(f"🛑 Stopping TTS - user interrupted (before sending)")
-                        break
-
                     tts_ms = int((time.time() - tts_start) * 1000)
                     logger.info(f"🔊 [{seq}] '{text[:30]}...' → {tts_ms}ms")
 
-                    if not self.should_stop_speaking:
+                    # 🎯 KEY FIX: ALWAYS send first audio chunk, even if interrupted
+                    # This ensures user hears at least something before interruption takes effect
+                    is_first_chunk = not self.first_audio_sent_this_turn
+
+                    if is_first_chunk or not self.should_stop_speaking:
                         audio_b64 = base64.b64encode(audio_mp3).decode()
                         await self.client_ws.send_json({
                             "type": "audio",
@@ -1106,6 +1175,14 @@ class RealtimeVoiceSession:
                         # Also track in backup list (for fallback)
                         spoken_sentences.append(text.strip())
                         logger.info(f"✅ Sentence sent seq={seq}: '{text[:30]}...'")
+
+                        # 🎯 Mark first audio as sent AFTER successfully sending
+                        if is_first_chunk:
+                            self.first_audio_sent_this_turn = True
+                            logger.info(f"🎯 First audio chunk sent - interruptions now allowed")
+                    else:
+                        logger.info(f"🛑 Skipping TTS chunk (interrupted): '{text[:30]}...'")
+                        break  # Exit after skipping
 
                     # Record AI audio in BACKGROUND (doesn't block playback)
                     if self.recording_enabled and text.strip():
