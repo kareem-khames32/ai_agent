@@ -488,7 +488,7 @@ class RealtimeVoiceSession:
         self.audio_buffer: bytes = b""
         self.last_audio_time: float = 0
         self.is_processing = False
-        self.silence_threshold = 0.2  # 🚀 200ms silence - faster response (was 300ms)
+        self.silence_threshold = 0.5  # 🎯 500ms - balanced for natural speech pauses
         self.min_audio_length = 3200  # minimum bytes before processing
         self.process_task: Optional[asyncio.Task] = None
 
@@ -531,8 +531,8 @@ class RealtimeVoiceSession:
             self.streaming_stt = StreamingSTT(
                 api_key=self.stt_api_key,
                 language=self.language,
-                endpointing=100,  # 🚀 100ms - ultra fast (was 150ms)
-                utterance_end_ms=200,  # 🚀 200ms silence = utterance end (was 300ms)
+                endpointing=200,  # 🎯 200ms - balanced for natural pauses
+                utterance_end_ms=400,  # 🎯 400ms silence = utterance end
                 interim_results=True,
                 vad_events=True,
             )
@@ -841,8 +841,8 @@ class RealtimeVoiceSession:
                             # Wait for proper silence
                             time_since_last_audio = time.time() - self.last_audio_time
                             time_since_speech_end = time.time() - self.last_speech_end_time if self.last_speech_end_time else 0
-                            # 🚀 Need 0.2s of silence - ultra fast response (was 0.3s)
-                            if time_since_last_audio > 0.2 and time_since_speech_end > 0.1:
+                            # 🎯 Need 0.5s of silence - balanced for natural speech
+                            if time_since_last_audio > 0.5 and time_since_speech_end > 0.2:
                                 logger.info(f"📤 Processing batch audio after {time_since_last_audio:.1f}s silence")
                                 await self.process_audio()
                     continue
@@ -871,17 +871,16 @@ class RealtimeVoiceSession:
                 time_since_last_transcript = time.time() - self.last_transcript_time
 
                 if self.utterance_complete:
-                    # 🚀 Utterance complete - process quickly!
-                    # 🚀 Small delay to catch any trailing words
-                    if time_since_last_transcript < 0.1:  # 100ms (was 150ms)
+                    # 🎯 Utterance complete - process with small buffer for trailing words
+                    if time_since_last_transcript < 0.2:  # 200ms buffer
                         continue
-                    if time_since_last_audio < 0.1:  # 100ms (was 150ms)
+                    if time_since_last_audio < 0.2:  # 200ms buffer
                         continue
                 else:
-                    # 🚀 No speech_final yet - ultra fast timeouts
-                    if time_since_last_audio < 0.2:  # 200ms (was 300ms)
+                    # 🎯 No speech_final yet - wait for natural pause
+                    if time_since_last_audio < 0.5:  # 500ms for natural pauses
                         continue
-                    if time_since_last_transcript < 0.15:  # 150ms (was 250ms)
+                    if time_since_last_transcript < 0.4:  # 400ms for transcript
                         continue
 
                 # User truly stopped - process the complete message!
