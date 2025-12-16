@@ -681,9 +681,15 @@ class RealtimeVoiceSession:
                 if not transcript:
                     # For batch STT (Azure, etc.) - wait for silence before processing
                     if len(self.audio_buffer) > self.min_audio_length and not self.is_processing:
-                        # Wait for user to stop speaking
+                        # 🎯 Make sure user is NOT speaking
+                        if self.user_is_speaking:
+                            continue
+                        # Wait for proper silence
                         time_since_last_audio = time.time() - self.last_audio_time
-                        if time_since_last_audio > 0.6:  # 600ms silence (was 1.2s)
+                        time_since_speech_end = time.time() - self.last_speech_end_time if self.last_speech_end_time else 0
+                        # Need 1.5s of silence to match frontend SILENCE_DURATION
+                        if time_since_last_audio > 1.5 and time_since_speech_end > 0.5:
+                            logger.info(f"📤 Processing batch audio after {time_since_last_audio:.1f}s silence")
                             await self.process_audio()
                     continue
 
@@ -860,9 +866,26 @@ class RealtimeVoiceSession:
         if self.is_processing or len(self.audio_buffer) < self.min_audio_length:
             return
 
+        # 🎯 Don't process if user is still speaking!
+        if self.user_is_speaking:
+            logger.info("⏳ User still speaking, waiting...")
+            return
+
         self.is_processing = True
         self.is_thinking = True
         self.should_restart_thinking = False
+
+        # 🎯 Wait a bit more to collect any trailing audio
+        await asyncio.sleep(0.3)
+
+        # 🎯 Check again if user started speaking during the wait
+        if self.user_is_speaking:
+            logger.info("⏳ User started speaking again, aborting process")
+            self.is_processing = False
+            self.is_thinking = False
+            return
+
+        # Now safe to take the buffer
         audio_to_process = self.audio_buffer
         self.audio_buffer = b""
         process_start = time.time()
@@ -2284,12 +2307,9 @@ async def realtime_voice_websocket(
                     session.last_speech_end_time = time.time()
                     logger.info(f"🔇 Speech ended - buffer: {len(session.audio_buffer)} bytes")
 
-                    # For batch STT (Azure, etc.) - process after silence
-                    # But only if we have enough audio and not already processing
-                    if (len(session.audio_buffer) > session.min_audio_length and
-                        not session.is_processing and
-                        not session.current_transcript.strip()):  # No streaming transcript
-                        await session.process_audio()
+                    # 🎯 DON'T process immediately! Let check_and_process handle it
+                    # This gives time for user to continue speaking after a pause
+                    # The check_and_process loop will pick it up after proper timeout
 
                 elif msg_type == "barge_in" and session:
                     # 🛑 BARGE-IN: User interrupted while AI was speaking
