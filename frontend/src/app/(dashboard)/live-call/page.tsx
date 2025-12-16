@@ -99,6 +99,8 @@ interface Assistant {
   interruptionEnabled?: boolean;
   interruptionWordsThreshold?: number;  // 0 = immediate, 1-10 = wait for N words
   stopOnHangup?: boolean;
+  // Timezone for date/time awareness
+  timezone?: string;  // e.g., "Africa/Cairo", "Asia/Riyadh"
 }
 
 type CallStatus = "idle" | "connecting" | "active" | "error";
@@ -634,6 +636,7 @@ export default function LiveCallPage() {
             // Other
             system_prompt: systemPrompt,
             language: assistant?.transcriberLanguage || "ar",
+            timezone: assistant?.timezone || "Africa/Cairo",
             // First message settings
             first_message: assistant?.firstMessage || "",
             first_message_mode: assistant?.firstMessageMode || "assistant-speaks-first",

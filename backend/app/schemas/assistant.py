@@ -63,6 +63,9 @@ class AssistantBase(BaseModel):
     transcriber_language: str = "ar-SA"
     transcriber_settings: Optional[TranscriberSettings] = None
 
+    # Timezone for date/time awareness (e.g., "Africa/Cairo", "Asia/Riyadh")
+    timezone: str = "Africa/Cairo"
+
     # Tools
     tools: List[str] = Field(default_factory=list)
 
@@ -96,6 +99,7 @@ class AssistantUpdate(BaseModel):
     transcriber_provider: Optional[str] = None
     transcriber_language: Optional[str] = None
     transcriber_settings: Optional[TranscriberSettings] = None
+    timezone: Optional[str] = None
     tools: Optional[List[str]] = None
     summary_prompt: Optional[str] = None
     success_evaluation_prompt: Optional[str] = None

@@ -74,6 +74,9 @@ class Assistant(Base):
     transcriber_language = Column(String(20), default="ar-SA")
     transcriber_settings = Column(JSONB, default={})
 
+    # Timezone for date/time awareness
+    timezone = Column(String(50), default="Africa/Cairo")  # Default to Egypt timezone
+
     # Tools - array of tool IDs
     tools = Column(JSONB, default=[])
 

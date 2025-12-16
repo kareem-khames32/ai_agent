@@ -21,6 +21,7 @@ import httpx
 from app.services.llm import LLMService, Message
 from app.services.tts import TTSService
 from app.services.stt_streaming import StreamingSTT, SentenceBuffer, TranscriptResult
+from app.services.base_prompt import combine_prompts
 
 
 # Suppress GeneratorExit RuntimeError - it's a warning, not a real error
@@ -2222,8 +2223,12 @@ async def realtime_voice_websocket(
                         tts_voice_id=config.get("tts_voice_id"),
                         tts_voice_speed=tts_voice_speed,
                         tts_voice_stability=tts_voice_stability,
-                        # Other
-                        system_prompt=config.get("system_prompt", "أنت مساعد صوتي ذكي. كن مختصراً."),
+                        # Other - combine base prompt with user's custom prompt
+                        system_prompt=combine_prompts(
+                            user_prompt=config.get("system_prompt"),
+                            timezone=config.get("timezone", "Africa/Cairo"),
+                            language=config.get("language", "ar"),
+                        ),
                         language=config.get("language", "ar"),
                         interruption_enabled=interruption_enabled,
                         interruption_words_threshold=interruption_words_threshold,
