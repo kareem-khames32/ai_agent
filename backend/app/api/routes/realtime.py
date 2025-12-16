@@ -467,6 +467,9 @@ class RealtimeVoiceSession:
             "نعم", "اي", "صح", "بالظبط", "فاهم", "فاهمك", "اوك", "اوكي",
             # Greetings (shouldn't interrupt AI mid-response)
             "عليكم السلام", "وعليكم السلام", "السلام عليكم", "اهلا", "مرحبا",
+            "ألو", "الو", "هلو", "alo", "hello", "hi",  # Phone greetings
+            # Common responses
+            "معاك", "معك", "معايا", "معي", "انا", "أنا", "ايه", "أيه",
             # English acknowledgments
             "ok", "okay", "yes", "yeah", "yep", "uh huh", "mm", "mmm", "hmm",
             "right", "sure", "got it", "i see", "alright",
@@ -584,6 +587,8 @@ class RealtimeVoiceSession:
         - backchannel: user acknowledging (آه، تمام) → IGNORE, don't interrupt AI
         - interruption: user wants to stop (لا، استنى) → INTERRUPT immediately
         - normal: regular speech → use word threshold
+
+        🔧 Uses WORD-BASED matching to avoid false positives like "ألو" matching "لا"
         """
         if not text:
             return "normal"
@@ -595,19 +600,27 @@ class RealtimeVoiceSession:
             clean = clean.replace(char, '')
         clean = clean.strip()
 
-        # Check for explicit interruption FIRST (takes priority)
-        for phrase in self.interruption_phrases:
-            if phrase in clean or clean == phrase:
-                logger.info(f"🛑 Classified as INTERRUPTION: '{text}'")
-                return "interruption"
+        # Split into words for accurate matching (avoid "ألو" matching "لا")
+        words = set(clean.split())
 
-        # Check for backchannel (acknowledgment)
+        # Check for backchannel FIRST (greetings, acknowledgments should NOT interrupt)
         for phrase in self.backchannel_phrases:
-            if phrase in clean or clean == phrase:
+            phrase_words = set(phrase.split())
+            # Check if ALL words in phrase exist in text
+            if phrase_words.issubset(words):
                 logger.info(f"💬 Classified as BACKCHANNEL: '{text}'")
                 return "backchannel"
 
-        # Normal speech
+        # Check for explicit interruption (only as EXACT WORD match)
+        # This prevents "ألو" from matching "لا"
+        for phrase in self.interruption_phrases:
+            phrase_words = set(phrase.split())
+            # Check if ALL words in phrase exist as exact words in text
+            if phrase_words.issubset(words):
+                logger.info(f"🛑 Classified as INTERRUPTION: '{text}'")
+                return "interruption"
+
+        # Normal speech - no special classification
         return "normal"
 
     async def _on_transcript(self, result: TranscriptResult):
