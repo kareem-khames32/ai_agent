@@ -891,10 +891,10 @@ class RealtimeVoiceSession:
                 # We must wait long enough to ensure user is TRULY done.
 
                 # 🎯 Require ALL conditions to be met:
-                # - No audio for 1.5 seconds
-                # - No transcript update for 1.5 seconds
-                # - Speech ended 1.5 seconds ago
-                min_silence = 1.5  # 1.5 seconds - safe for Arabic speech
+                # - No audio for 1 second
+                # - No transcript update for 1 second
+                # - Speech ended 1 second ago
+                min_silence = 1.0  # 1 second - balanced for responsiveness
 
                 if time_since_last_audio < min_silence:
                     continue
@@ -912,18 +912,24 @@ class RealtimeVoiceSession:
                     logger.info("⏳ Speech restarted - waiting for completion...")
                     continue
 
-                # 🎯 Also check if transcript was updated very recently (user still active)
-                final_check_time = time.time() - self.last_transcript_time
-                if final_check_time < 0.5:
-                    logger.debug("⏳ Transcript updated recently - waiting more...")
-                    continue
-
-                # User truly stopped - process the complete message!
-                # 🎯 Prevent duplicate processing of same message
-                if hasattr(self, '_last_processed_transcript') and self._last_processed_transcript == transcript:
-                    logger.debug(f"⏭️ Skipping duplicate transcript: '{transcript[:30]}...'")
-                    self.current_transcript = ""  # Clear buffer
-                    continue
+                # 🎯 SMART CHECK: If this transcript contains what we last processed,
+                # it's likely a continuation we caught partially. Extract only NEW content.
+                if hasattr(self, '_last_processed_transcript') and self._last_processed_transcript:
+                    if transcript == self._last_processed_transcript:
+                        # Exact duplicate - skip
+                        logger.debug(f"⏭️ Skipping duplicate transcript")
+                        self.current_transcript = ""
+                        continue
+                    elif transcript.startswith(self._last_processed_transcript):
+                        # New transcript STARTS with what we processed - extract new part only
+                        new_part = transcript[len(self._last_processed_transcript):].strip()
+                        if new_part:
+                            logger.info(f"📝 Continuation detected - processing new part only: '{new_part}'")
+                            transcript = new_part
+                        else:
+                            # No new content
+                            self.current_transcript = ""
+                            continue
 
                 self._last_processed_transcript = transcript  # Track what we processed
                 self.current_transcript = ""  # Clear buffer
