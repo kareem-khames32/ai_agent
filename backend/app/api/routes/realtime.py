@@ -892,25 +892,28 @@ class RealtimeVoiceSession:
                     # No speech_ended event yet - keep waiting
                     continue
 
-                # 🎯 UNIFIED TIMEOUT - Don't trust STT's "final" signal!
-                # STT sends "final" during brief pauses, which is unreliable.
-                # Use the SAME long timeout for ALL cases.
+                # 🎯 IMPORTANT: STT interim results are often INCOMPLETE!
+                # The STT sends partial text while still processing.
+                # We MUST wait for FINAL result, or wait longer for interims.
                 #
-                # Arabic speech has natural pauses of 1-2 seconds within sentences.
-                # We must wait long enough to ensure user is TRULY done.
+                # From logs: interim="ما اعرف مش" but final="ما اعرف مش معايا انا"
+                # The interim was MISSING the last words!
 
-                # 🎯 Require ALL conditions to be met:
-                # - No audio for 1 second
-                # - No transcript update for 1 second
-                # - Speech ended 1 second ago
-                min_silence = 1.0  # 1 second - balanced for responsiveness
-
-                if time_since_last_audio < min_silence:
-                    continue
-                if time_since_last_transcript < min_silence:
-                    continue
-                if time_since_speech_end < min_silence:
-                    continue
+                if self.utterance_complete:
+                    # ✅ Got FINAL from STT - it's reliable, process quickly
+                    if time_since_last_transcript < 0.5:  # 500ms after final
+                        continue
+                    if time_since_speech_end < 0.5:
+                        continue
+                else:
+                    # ⚠️ Only have INTERIM - STT might still be processing!
+                    # Wait MUCH longer to give STT time to send complete text
+                    if time_since_last_audio < 2.0:  # 2 seconds
+                        continue
+                    if time_since_last_transcript < 2.0:  # 2 seconds
+                        continue
+                    if time_since_speech_end < 2.0:  # 2 seconds
+                        continue
 
                 # 🎯 FINAL CHECK before processing - user might have started speaking again!
                 # This prevents race condition where timeout passes but user resumes
