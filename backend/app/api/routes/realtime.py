@@ -892,28 +892,21 @@ class RealtimeVoiceSession:
                     # No speech_ended event yet - keep waiting
                     continue
 
-                # 🎯 IMPORTANT: STT interim results are often INCOMPLETE!
-                # The STT sends partial text while still processing.
-                # We MUST wait for FINAL result, or wait longer for interims.
+                # 🎯 CRITICAL: Don't trust STT's FINAL signal AT ALL!
+                # STT sends FINAL during brief pauses WITHIN sentences.
+                # Example: User says "إن شاء الله بسدد بعد شهرين يا باشا"
+                # STT sends: FINAL "إن شاء الله بسدد بعد" (WRONG!)
+                # Then: "شهرين يا باشا" comes as new utterance
                 #
-                # From logs: interim="ما اعرف مش" but final="ما اعرف مش معايا انا"
-                # The interim was MISSING the last words!
+                # Solution: Ignore final/interim distinction completely.
+                # Wait for transcript to STABILIZE (no updates for 1.5s)
 
-                if self.utterance_complete:
-                    # ✅ Got FINAL from STT - it's reliable, process quickly
-                    if time_since_last_transcript < 0.5:  # 500ms after final
-                        continue
-                    if time_since_speech_end < 0.5:
-                        continue
-                else:
-                    # ⚠️ Only have INTERIM - STT might still be processing!
-                    # Wait MUCH longer to give STT time to send complete text
-                    if time_since_last_audio < 2.0:  # 2 seconds
-                        continue
-                    if time_since_last_transcript < 2.0:  # 2 seconds
-                        continue
-                    if time_since_speech_end < 2.0:  # 2 seconds
-                        continue
+                min_wait = 1.5  # 1.5 seconds - same for ALL cases
+
+                if time_since_last_transcript < min_wait:
+                    continue
+                if time_since_speech_end < min_wait:
+                    continue
 
                 # 🎯 FINAL CHECK before processing - user might have started speaking again!
                 # This prevents race condition where timeout passes but user resumes
