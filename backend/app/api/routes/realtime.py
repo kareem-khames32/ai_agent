@@ -868,8 +868,29 @@ class RealtimeVoiceSession:
             self.user_is_speaking = False
             self.last_speech_end_time = time.time()
             logger.info("🔇 Speech ended - waiting for more or processing after silence")
-            # DON'T trigger processing here - let the timeout handler decide
-            # This allows collecting multiple speech segments
+
+            # 🎯 AZURE FIX: Azure STT often doesn't send is_final!
+            # If we have interim transcript but no timer running, start one now
+            # This handles the case where Azure only sends interim results
+            if self.current_transcript.strip():
+                text = self.current_transcript.strip()
+                # Only add if not duplicate of last buffer entry
+                if not self.transcript_buffer or self.transcript_buffer[-1] != text:
+                    self.transcript_buffer.append(text)
+                    logger.info(f"📝 Buffer[{len(self.transcript_buffer)}] (from interim on speech_end): '{text}'")
+                self.current_transcript = ""  # Clear to avoid duplicates
+
+            # Start timer if we have buffered content but no timer running
+            ai_is_busy = self.is_speaking or self.is_thinking or self.is_processing
+            if self.transcript_buffer and not ai_is_busy:
+                if not self.process_timer or self.process_timer.done():
+                    combined_text = " ".join(self.transcript_buffer)
+                    timeout = self.calculate_smart_timeout(combined_text)
+                    self.process_timer = asyncio.create_task(
+                        self._delayed_process(timeout)
+                    )
+                    logger.info(f"⏰ Timer started on speech_end: {timeout}s for '{combined_text[:40]}...'")
+
             await self.client_ws.send_json({"type": "speech_ended"})
         except Exception as e:
             logger.error(f"❌ Error in _on_speech_ended: {e}")
