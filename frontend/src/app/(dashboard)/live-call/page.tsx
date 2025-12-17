@@ -1011,8 +1011,8 @@ export default function LiveCallPage() {
       let chunkCount = 0;
       let silenceStart = 0;
       let isSpeakingNow = false;
-      const SILENCE_THRESHOLD = 0.03; // Audio level threshold for VAD (lower = more sensitive)
-      const SILENCE_DURATION = 300; // 🚀 300ms - human-like fast response
+      const SILENCE_THRESHOLD = 0.02; // Audio level threshold for VAD (lower = less false silence detection)
+      const SILENCE_DURATION = 800; // 🎯 800ms - prevents false speech_end during continuous speech
 
       processor.onaudioprocess = (e) => {
         if (wsRef.current?.readyState === WebSocket.OPEN && !isMutedRef.current) {
