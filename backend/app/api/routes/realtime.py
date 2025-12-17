@@ -847,19 +847,20 @@ class RealtimeVoiceSession:
                 self.process_timer.cancel()
                 logger.info("⏰ Timer cancelled - speech started again")
 
-            await self.client_ws.send_json({"type": "speech_started"})
-
-            # 🎯 VAPI-style: Don't interrupt immediately on speech start
-            # Wait for transcript to determine if it's a backchannel or real interruption
-            # The _on_transcript method will handle interruption based on:
-            # - Backchannel (آه، تمام) → Ignore
-            # - Explicit interruption (لا، استنى) → Stop immediately
-            # - Normal speech → Use word threshold
-
-            if self.is_speaking or self.is_thinking:
-                logger.info(f"🎤 Speech started while AI busy - waiting for transcript to classify")
+            # 🎯 CRITICAL FIX: Clear buffer when NEW turn starts!
+            # If AI is NOT busy (previous turn completed), this is a NEW turn
+            # We must clear the buffer to avoid combining with old transcript
+            ai_is_busy = self.is_speaking or self.is_thinking or self.is_processing
+            if not ai_is_busy:
+                if self.transcript_buffer:
+                    logger.info(f"🗑️ Clearing old buffer ({len(self.transcript_buffer)} items) - new turn starting")
+                self.transcript_buffer.clear()
+                self.current_transcript = ""
+                logger.info(f"🎤 Speech started - AI not busy, NEW turn (buffer cleared)")
             else:
-                logger.info(f"🎤 Speech started - AI not busy, will process as normal")
+                logger.info(f"🎤 Speech started while AI busy - waiting for transcript to classify")
+
+            await self.client_ws.send_json({"type": "speech_started"})
         except Exception as e:
             logger.error(f"❌ Error in _on_speech_started: {e}")
 
