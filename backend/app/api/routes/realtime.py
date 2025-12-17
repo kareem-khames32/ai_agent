@@ -464,12 +464,12 @@ class RealtimeVoiceSession:
         self.backchannel_phrases = {
             # Arabic acknowledgments
             "آه", "أه", "اه", "ايوه", "ايوا", "أيوه", "تمام", "طيب", "ماشي", "حاضر",
-            "نعم", "اي", "صح", "بالظبط", "فاهم", "فاهمك", "اوك", "اوكي",
+            "نعم", "صح", "بالظبط", "فاهم", "فاهمك", "اوك", "اوكي",
             # Greetings (shouldn't interrupt AI mid-response)
             "عليكم السلام", "وعليكم السلام", "السلام عليكم", "اهلا", "مرحبا",
             "ألو", "الو", "هلو", "alo", "hello", "hi",  # Phone greetings
-            # Common responses
-            "معاك", "معك", "معايا", "معي", "انا", "أنا", "ايه", "أيه",
+            # ❌ REMOVED: "معاك", "معك", "معايا", "معي", "انا", "أنا", "ايه", "أيه"
+            # These are too common and appear in normal sentences
             # English acknowledgments
             "ok", "okay", "yes", "yeah", "yep", "uh huh", "mm", "mmm", "hmm",
             "right", "sure", "got it", "i see", "alright",
@@ -590,6 +590,7 @@ class RealtimeVoiceSession:
         - normal: regular speech → use word threshold
 
         🔧 Uses WORD-BASED matching to avoid false positives like "ألو" matching "لا"
+        🔧 ONLY classifies SHORT utterances (≤3 words) as backchannel/interruption
         """
         if not text:
             return "normal"
@@ -603,6 +604,14 @@ class RealtimeVoiceSession:
 
         # Split into words for accurate matching (avoid "ألو" matching "لا")
         words = set(clean.split())
+        word_count = len(words)
+
+        # 🎯 KEY FIX: Only classify SHORT utterances as backchannel/interruption
+        # Long sentences should NEVER be classified as backchannel even if they
+        # contain words like "انا" or "معايا"
+        if word_count > 4:
+            # Long sentence - always "normal", let it be processed fully
+            return "normal"
 
         # Check for backchannel FIRST (greetings, acknowledgments should NOT interrupt)
         for phrase in self.backchannel_phrases:
