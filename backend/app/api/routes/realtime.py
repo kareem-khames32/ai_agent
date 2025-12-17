@@ -917,26 +917,38 @@ class RealtimeVoiceSession:
                     logger.info("⏳ Speech restarted - waiting for completion...")
                     continue
 
-                # 🎯 SMART CHECK: If this transcript contains what we last processed,
-                # it's likely a continuation we caught partially. Extract only NEW content.
+                # 🎯 SMART CONTINUATION: If new transcript comes SHORTLY after we processed
+                # something, it's likely a continuation of the same sentence.
+                # User might pause 2-3 seconds while thinking, then continue.
                 if hasattr(self, '_last_processed_transcript') and self._last_processed_transcript:
                     if transcript == self._last_processed_transcript:
                         # Exact duplicate - skip
                         logger.debug(f"⏭️ Skipping duplicate transcript")
                         self.current_transcript = ""
                         continue
-                    elif transcript.startswith(self._last_processed_transcript):
-                        # New transcript STARTS with what we processed - extract new part only
-                        new_part = transcript[len(self._last_processed_transcript):].strip()
-                        if new_part:
-                            logger.info(f"📝 Continuation detected - processing new part only: '{new_part}'")
-                            transcript = new_part
+
+                    # Check if this is a continuation (new transcript came quickly after last process)
+                    time_since_last_process = time.time() - getattr(self, '_last_process_time', 0)
+
+                    if time_since_last_process < 5.0:  # Within 5 seconds
+                        # This is likely a CONTINUATION - user paused then continued
+                        # Combine with what we last processed
+                        if not transcript.startswith(self._last_processed_transcript):
+                            combined = f"{self._last_processed_transcript} {transcript}"
+                            logger.info(f"📝 Continuation detected! Combining: '{self._last_processed_transcript}' + '{transcript}'")
+                            transcript = combined
                         else:
-                            # No new content
-                            self.current_transcript = ""
-                            continue
+                            # Already starts with previous - just extract new part
+                            new_part = transcript[len(self._last_processed_transcript):].strip()
+                            if new_part:
+                                logger.info(f"📝 Extracting new part only: '{new_part}'")
+                                transcript = new_part
+                            else:
+                                self.current_transcript = ""
+                                continue
 
                 self._last_processed_transcript = transcript  # Track what we processed
+                self._last_process_time = time.time()  # Track WHEN we processed
                 self.current_transcript = ""  # Clear buffer
                 self.utterance_complete = False  # Reset for next utterance
                 logger.info(f"📝 Processing complete message: '{transcript}'")
