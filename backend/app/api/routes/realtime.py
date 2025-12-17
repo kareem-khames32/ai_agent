@@ -620,9 +620,10 @@ class RealtimeVoiceSession:
             clean = clean.replace(char, '')
         clean = clean.strip()
 
-        # Split into words for accurate matching (avoid "ألو" matching "لا")
-        words = set(clean.split())
-        word_count = len(words)
+        # Split into words - use list for count, set for matching
+        word_list = clean.split()
+        word_count = len(word_list)  # Count ALL words including duplicates
+        words = set(word_list)  # Set for efficient matching
 
         # 🎯 KEY FIX: Only classify SHORT utterances as backchannel/interruption
         # Long sentences should NEVER be classified as backchannel even if they
@@ -2674,20 +2675,15 @@ async def realtime_voice_websocket(
 
                 elif msg_type == "speech_start" and session:
                     # 🎤 Client detected start of speech (from frontend VAD)
-                    # This is important for batch STT providers (Azure, Groq, etc.)
-                    session.user_is_speaking = True
-                    session.speech_start_time = time.time()
                     logger.info("🎤 Speech started (frontend VAD)")
+                    # 🎯 Call session's _on_speech_started to cancel timer if running!
+                    await session._on_speech_started()
 
                 elif msg_type == "speech_end" and session:
-                    # Client detected end of speech - mark and maybe process
-                    session.user_is_speaking = False
-                    session.last_speech_end_time = time.time()
-                    logger.info(f"🔇 Speech ended - buffer: {len(session.audio_buffer)} bytes")
-
-                    # 🎯 DON'T process immediately! Let check_and_process handle it
-                    # This gives time for user to continue speaking after a pause
-                    # The check_and_process loop will pick it up after proper timeout
+                    # Client detected end of speech - call session handler
+                    logger.info(f"🔇 Speech ended (frontend VAD) - buffer: {len(session.audio_buffer)} bytes")
+                    # 🎯 Call session's _on_speech_ended to trigger smart timer!
+                    await session._on_speech_ended()
 
                 elif msg_type == "barge_in" and session:
                     # 🛑 BARGE-IN: User interrupted while AI was speaking
