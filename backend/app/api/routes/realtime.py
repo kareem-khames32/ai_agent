@@ -903,6 +903,21 @@ class RealtimeVoiceSession:
                     if time_since_speech_end < 1.2:  # 1.2s after VAD says speech ended
                         continue
 
+                # 🎯 FINAL CHECK before processing - user might have started speaking again!
+                # This prevents race condition where timeout passes but user resumes
+                if self.user_is_speaking:
+                    logger.info("⏳ User started speaking again - waiting...")
+                    continue
+                if self.last_speech_end_time == 0:
+                    logger.info("⏳ Speech restarted - waiting for completion...")
+                    continue
+
+                # 🎯 Also check if transcript was updated very recently (user still active)
+                final_check_time = time.time() - self.last_transcript_time
+                if final_check_time < 0.5:
+                    logger.debug("⏳ Transcript updated recently - waiting more...")
+                    continue
+
                 # User truly stopped - process the complete message!
                 # 🎯 Prevent duplicate processing of same message
                 if hasattr(self, '_last_processed_transcript') and self._last_processed_transcript == transcript:
