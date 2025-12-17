@@ -512,6 +512,24 @@ class RealtimeVoiceSession:
         self.user_is_speaking: bool = False  # Track if user is currently speaking
         self.utterance_complete: bool = False  # True when speech_final received (user stopped)
 
+        # 🎯 VAPI-style Smart Turn Detection - Buffer-based with smart timeouts
+        self.transcript_buffer: list[str] = []  # Buffer to collect transcript segments
+        self.process_timer: Optional[asyncio.Task] = None  # Cancellable timer for delayed processing
+
+        # 🎯 Smart timeout configuration - words that indicate incomplete sentence
+        self.continuation_words_ar = {
+            "و", "يعني", "بس", "لكن", "علشان", "عشان", "لان", "لأن",
+            "زي", "مثل", "كمان", "برضو", "طبعا", "اكيد", "ان", "إن",
+            "اللي", "اللى", "دي", "دا", "ده", "في", "فى", "على", "عن",
+            "مع", "من", "الى", "إلى", "هو", "هي", "هى", "انا", "أنا",
+            "انت", "انتي", "احنا", "هم", "اي", "أي", "او", "أو",
+        }
+        self.continuation_words_en = {
+            "and", "but", "or", "so", "because", "if", "when", "that",
+            "which", "who", "where", "like", "um", "uh", "well", "i mean",
+            "you know", "the", "a", "an", "to", "for", "with", "about",
+        }
+
         # 🧠 Smart re-thinking - cancel and restart if user adds more before AI speaks
         self.is_thinking: bool = False  # AI is processing (LLM) but not speaking yet
         self.should_restart_thinking: bool = False  # Signal to restart with new input
@@ -633,6 +651,68 @@ class RealtimeVoiceSession:
         # Normal speech - no special classification
         return "normal"
 
+    def calculate_smart_timeout(self, text: str) -> float:
+        """
+        🎯 VAPI-style Smart Endpointing - Calculate timeout based on content
+
+        Returns shorter timeout for complete sentences, longer for incomplete.
+        This ensures:
+        - Fast response (~300ms) when user finishes a complete sentence
+        - Patient wait (~1.5s) when user is mid-sentence or pausing to think
+
+        Logic:
+        - Ends with punctuation (. ? ! ؟) → 0.3s (complete sentence)
+        - Contains numbers → 0.5s (user might add more digits)
+        - Ends with continuation word (و، يعني، بس) → 1.5s (incomplete)
+        - Ends with ellipsis (...) → 1.5s (user thinking)
+        - Default → 0.8s (balanced)
+        """
+        if not text:
+            return 0.8  # Default
+
+        text = text.strip()
+
+        # 🎯 FAST PATH: Complete sentence with punctuation
+        # Arabic: ؟ (question mark), ، (comma), . (period)
+        # Note: Don't use ، (Arabic comma) as end marker - it's mid-sentence
+        end_punctuation = ('.', '؟', '?', '!', '。')
+        if text.endswith(end_punctuation):
+            logger.info(f"⚡ Smart timeout: 0.3s (punctuation: '{text[-1]}')")
+            return 0.3
+
+        # 🎯 SLOW PATH: Incomplete sentence markers
+        # Check if ends with ellipsis (thinking)
+        if text.endswith('...') or text.endswith('…'):
+            logger.info(f"⏳ Smart timeout: 1.5s (ellipsis)")
+            return 1.5
+
+        # Check if ends with continuation word (Arabic)
+        words = text.split()
+        if words:
+            last_word = words[-1].lower()
+            # Remove trailing punctuation for word check
+            for char in '،,.!?؟':
+                last_word = last_word.rstrip(char)
+
+            if last_word in self.continuation_words_ar:
+                logger.info(f"⏳ Smart timeout: 1.5s (Arabic continuation: '{last_word}')")
+                return 1.5
+
+            if last_word in self.continuation_words_en:
+                logger.info(f"⏳ Smart timeout: 1.5s (English continuation: '{last_word}')")
+                return 1.5
+
+        # 🎯 MEDIUM PATH: Numbers (user might add more)
+        if any(c.isdigit() for c in text):
+            # Check if the number is at the end
+            if text and text[-1].isdigit():
+                logger.info(f"⏳ Smart timeout: 0.5s (ends with number)")
+                return 0.5
+
+        # 🎯 DEFAULT: Balanced timeout
+        logger.info(f"⏱️ Smart timeout: 0.8s (default)")
+        return 0.8
+
     async def _on_transcript(self, result: TranscriptResult):
         """Handle transcript from streaming STT with BACKCHANNEL DETECTION"""
         try:
@@ -700,25 +780,54 @@ class RealtimeVoiceSession:
                 logger.info(f"💬 Backchannel not buffered (AI busy): '{result.text}'")
                 return
 
-            # 🎯 Buffer BOTH interim and final results
-            # Azure Streaming often doesn't send final results, so we use interim too
+            # 🎯 VAPI-style Smart Turn Detection with BUFFER system
+            # Instead of REPLACE, we BUFFER is_final results and use smart timeouts
             #
-            # NOTE: We REPLACE (not append) because:
-            # 1. Streaming STT sends FULL accumulated text in each interim
-            # 2. After pause, STT may re-transcribe with corrections (مية → 100)
-            # 3. Appending causes duplication like "خلاص بدفع مية خلاص بدفع 100"
-            # The longer timeouts (800ms) will collect the full sentence naturally
+            # KEY INSIGHT: STT sends is_final during brief pauses WITHIN sentences!
+            # Example: "السلام عليكم" (pause) "ورحمة الله وبركاته"
+            # STT sends: FINAL "السلام عليكم", then FINAL "ورحمة الله وبركاته"
+            #
+            # Solution: Buffer is_final results, cancel/restart timer on each one,
+            # and use smart timeout based on content to decide when to process.
 
             if result.is_final:
-                self.current_transcript = result.text
+                # 🎯 STEP 1: Cancel existing timer (user is still talking!)
+                if self.process_timer and not self.process_timer.done():
+                    self.process_timer.cancel()
+                    logger.info("⏰ Timer cancelled - new transcript arrived")
+
+                # 🎯 STEP 2: ADD to buffer (not replace!)
+                # Only add if not duplicate of last buffer entry
+                text = result.text.strip()
+                if text and (not self.transcript_buffer or self.transcript_buffer[-1] != text):
+                    self.transcript_buffer.append(text)
+                    logger.info(f"📝 Buffer[{len(self.transcript_buffer)}]: '{text}'")
+
+                # Also keep current_transcript updated for compatibility
+                self.current_transcript = text
                 self.last_transcript_time = time.time()
                 self.utterance_complete = True
-                logger.info(f"📝 Final: {result.text}")
+
+                # 🎯 STEP 3: Calculate smart timeout based on combined buffer
+                combined_text = " ".join(self.transcript_buffer)
+                timeout = self.calculate_smart_timeout(combined_text)
+
+                # 🎯 STEP 4: Start new timer for delayed processing
+                # Don't start timer if AI is busy (will be handled by restart logic)
+                if not ai_is_busy:
+                    self.process_timer = asyncio.create_task(
+                        self._delayed_process(timeout)
+                    )
+                    logger.info(f"⏰ Timer started: {timeout}s for '{combined_text[:40]}...'")
+                else:
+                    logger.info(f"🔄 AI busy, buffering for restart: '{text[:40]}...'")
+
             else:
-                # Interim result - always replace (STT sends full text each time)
+                # Interim result - just update current_transcript for display
+                # Don't trigger timer yet - wait for is_final
                 self.current_transcript = result.text
                 self.last_transcript_time = time.time()
-                logger.info(f"📝 Interim: {result.text[:50]}...")
+                logger.debug(f"📝 Interim: {result.text[:50]}...")
         except Exception as e:
             logger.error(f"❌ Error in _on_transcript: {e}")
 
@@ -730,6 +839,13 @@ class RealtimeVoiceSession:
             self.utterance_complete = False  # Reset - new speech starting
             self.interrupt_word_count = 0  # Reset word counter for new speech
             self.last_speech_end_time = 0  # 🎯 KEY: Reset so check_and_process waits for speech_ended
+
+            # 🎯 Cancel any pending process timer - user is speaking again!
+            # This is crucial: if timer was about to fire, cancel it and wait for full utterance
+            if self.process_timer and not self.process_timer.done():
+                self.process_timer.cancel()
+                logger.info("⏰ Timer cancelled - speech started again")
+
             await self.client_ws.send_json({"type": "speech_started"})
 
             # 🎯 VAPI-style: Don't interrupt immediately on speech start
@@ -757,6 +873,61 @@ class RealtimeVoiceSession:
             await self.client_ws.send_json({"type": "speech_ended"})
         except Exception as e:
             logger.error(f"❌ Error in _on_speech_ended: {e}")
+
+    async def _delayed_process(self, timeout: float):
+        """
+        🎯 VAPI-style Delayed Processing
+
+        Wait for smart timeout, then join buffer and process.
+        This method is called via asyncio.create_task() and can be cancelled
+        if new transcript arrives before timeout.
+
+        The magic: If user says more within the timeout, the timer gets
+        cancelled and restarted. Only when user is truly done (timeout
+        completes) do we process the full combined message.
+        """
+        try:
+            logger.info(f"⏳ Waiting {timeout}s before processing...")
+            await asyncio.sleep(timeout)
+
+            # 🎯 After timeout: Check if there's anything to process
+            if not self.transcript_buffer:
+                logger.info("⏰ Timer fired but buffer empty - skipping")
+                return
+
+            # 🎯 Check if AI is busy (might have started processing in parallel)
+            if self.is_processing or self.is_speaking or self.is_thinking:
+                logger.info("⏰ Timer fired but AI busy - will be handled by restart logic")
+                return
+
+            # 🎯 Check if user started speaking again during the wait
+            if self.user_is_speaking:
+                logger.info("⏰ Timer fired but user speaking - waiting...")
+                return
+
+            # 🎯 JOIN buffer into single transcript
+            combined_transcript = " ".join(self.transcript_buffer)
+            buffer_size = len(self.transcript_buffer)
+
+            # Clear the buffer BEFORE processing to avoid duplicates
+            self.transcript_buffer.clear()
+            self.current_transcript = ""  # Also clear for compatibility
+
+            # 🎯 Skip if duplicate of last processed
+            if combined_transcript == self._last_processed_transcript:
+                logger.info(f"⏰ Skipping duplicate: '{combined_transcript[:40]}...'")
+                return
+
+            logger.info(f"⏰ Timer fired! Processing {buffer_size} segments: '{combined_transcript[:50]}...'")
+
+            # 🎯 Process the combined transcript as a single message
+            await self.process_transcript(combined_transcript, is_continuation=False)
+
+        except asyncio.CancelledError:
+            # Timer was cancelled - this is expected when new transcript arrives
+            logger.debug("⏰ Timer cancelled (new transcript arrived)")
+        except Exception as e:
+            logger.error(f"❌ Error in _delayed_process: {e}")
 
     def _get_default_model(self, provider: str) -> str:
         """Get default model for provider"""
@@ -822,142 +993,53 @@ class RealtimeVoiceSession:
 
     async def check_and_process(self):
         """
-        Collect ALL user speech and process only after complete silence.
-        This ensures the AI responds to the full message, not fragments.
+        🎯 VAPI-style Smart Turn Detection - SIMPLIFIED
 
-        🚀 OPTIMIZED for low latency:
-        - Fast polling (50ms)
-        - Quick response after utterance end (200ms)
-        - Balanced for speech combination
+        The main transcript processing is now handled by:
+        1. _on_transcript() - buffers transcripts and starts smart timer
+        2. _delayed_process() - processes after smart timeout
+
+        This method now only handles:
+        - Batch STT fallback (when streaming STT not active)
+        - Restart signaling when AI is busy and user adds more input
         """
         try:
             while True:
                 # 🚀 Fast polling for responsive feel
-                await asyncio.sleep(0.05)  # 50ms polling (was 200ms)
+                await asyncio.sleep(0.1)  # 100ms polling
 
-                # Check if there's buffered transcript to process
-                transcript = self.current_transcript.strip()
+                # 🎯 Check if streaming STT is active
+                streaming_active = (
+                    (self.streaming_stt and self.streaming_stt.is_connected) or
+                    (self.azure_streaming_stt and self.azure_streaming_stt.is_connected)
+                )
 
-                # Skip if nothing to process or AI is busy
-                if not transcript:
-                    # 🎯 ONLY use batch STT if streaming STT is NOT active
-                    # This prevents double-processing (streaming + batch)
-                    streaming_active = (
-                        (self.streaming_stt and self.streaming_stt.is_connected) or
-                        (self.azure_streaming_stt and self.azure_streaming_stt.is_connected)
-                    )
-
-                    if not streaming_active:
-                        # Batch STT fallback - only when no streaming
-                        if len(self.audio_buffer) > self.min_audio_length and not self.is_processing:
-                            # 🎯 Make sure user is NOT speaking
-                            if self.user_is_speaking:
-                                continue
-                            # Wait for proper silence
-                            time_since_last_audio = time.time() - self.last_audio_time
-                            time_since_speech_end = time.time() - self.last_speech_end_time if self.last_speech_end_time else 0
-                            # 🎯 Need 0.5s of silence - balanced for natural speech
-                            if time_since_last_audio > 0.5 and time_since_speech_end > 0.2:
-                                logger.info(f"📤 Processing batch audio after {time_since_last_audio:.1f}s silence")
-                                await self.process_audio()
+                if streaming_active:
+                    # 🎯 STREAMING MODE: Timer-based processing handles everything
+                    # Just handle restart signaling when AI is busy
+                    if self.transcript_buffer and (self.is_speaking or self.is_processing or self.is_thinking):
+                        # User has buffered input while AI is busy - signal restart
+                        if not self.should_restart_thinking:
+                            combined = " ".join(self.transcript_buffer)
+                            logger.info(f"🔄 User added more while AI busy: '{combined[:50]}...'")
+                            self.should_restart_thinking = True
                     continue
 
-                # If user is still speaking (VAD), keep buffering
-                if self.user_is_speaking:
-                    continue
-
-                # If AI is processing or speaking, handle accordingly
-                if self.is_speaking or self.is_processing:
-                    # AI is busy - but user has new input!
-                    # Signal that we have more to say (will be combined)
-                    if not self.should_restart_thinking:
-                        logger.info(f"🔄 User added more while AI busy: '{transcript[:50]}...'")
-                        self.should_restart_thinking = True
-                    continue
-
-                if self.is_thinking:
-                    # User added more while AI thinking - signal restart
-                    logger.info(f"🔄 User added more while AI thinking: '{transcript[:50]}...'")
-                    self.should_restart_thinking = True
-                    continue
-
-                # 🎯 Wait for utterance to be complete (speech_final from Deepgram)
-                time_since_last_audio = time.time() - self.last_audio_time
-                time_since_last_transcript = time.time() - self.last_transcript_time
-                time_since_speech_end = time.time() - self.last_speech_end_time if self.last_speech_end_time else 0
-
-                # 🎯 KEY FIX: Must have speech_ended event AND enough silence
-                # This prevents processing while user is still mid-sentence
-                if self.last_speech_end_time == 0:
-                    # No speech_ended event yet - keep waiting
-                    continue
-
-                # 🎯 CRITICAL: Don't trust STT's FINAL signal AT ALL!
-                # STT sends FINAL during brief pauses WITHIN sentences.
-                # Example: User says "إن شاء الله بسدد بعد شهرين يا باشا"
-                # STT sends: FINAL "إن شاء الله بسدد بعد" (WRONG!)
-                # Then: "شهرين يا باشا" comes as new utterance
-                #
-                # Solution: Wait for STT to fully process the audio.
-                # STT can take 2-3 seconds to finalize the LAST part of speech.
-                # We must wait longer to ensure we get the complete transcript.
-
-                # Wait 2s after last transcript (STT might send more)
-                if time_since_last_transcript < 2.0:
-                    continue
-
-                # Wait 2.5s after speech ended (STT needs time to process final audio)
-                if time_since_speech_end < 2.5:
-                    continue
-
-                # 🎯 FINAL CHECK before processing - user might have started speaking again!
-                # This prevents race condition where timeout passes but user resumes
-                if self.user_is_speaking:
-                    logger.info("⏳ User started speaking again - waiting...")
-                    continue
-                if self.last_speech_end_time == 0:
-                    logger.info("⏳ Speech restarted - waiting for completion...")
-                    continue
-
-                # 🎯 SMART CONTINUATION: If new transcript comes SHORTLY after we processed
-                # something, it's likely a continuation of the same sentence.
-                # User might pause 2-3 seconds while thinking, then continue.
-                is_continuation = False  # Track if this is a continuation
-
-                if hasattr(self, '_last_processed_transcript') and self._last_processed_transcript:
-                    if transcript == self._last_processed_transcript:
-                        # Exact duplicate - skip
-                        logger.debug(f"⏭️ Skipping duplicate transcript")
-                        self.current_transcript = ""
+                # 🎯 BATCH STT FALLBACK: Only when streaming STT is NOT active
+                if len(self.audio_buffer) > self.min_audio_length and not self.is_processing:
+                    # Make sure user is NOT speaking
+                    if self.user_is_speaking:
                         continue
 
-                    # Check if this is a continuation (new transcript came quickly after last process)
-                    time_since_last_process = time.time() - getattr(self, '_last_process_time', 0)
+                    # Wait for proper silence
+                    time_since_last_audio = time.time() - self.last_audio_time
+                    time_since_speech_end = time.time() - self.last_speech_end_time if self.last_speech_end_time else 0
 
-                    if time_since_last_process < 5.0:  # Within 5 seconds
-                        is_continuation = True  # Mark as continuation
-                        # This is likely a CONTINUATION - user paused then continued
-                        # Combine with what we last processed
-                        if not transcript.startswith(self._last_processed_transcript):
-                            combined = f"{self._last_processed_transcript} {transcript}"
-                            logger.info(f"📝 Continuation detected! Combining: '{self._last_processed_transcript}' + '{transcript}'")
-                            transcript = combined
-                        else:
-                            # Already starts with previous - just extract new part
-                            new_part = transcript[len(self._last_processed_transcript):].strip()
-                            if new_part:
-                                logger.info(f"📝 Extracting new part only: '{new_part}'")
-                                transcript = new_part
-                            else:
-                                self.current_transcript = ""
-                                continue
+                    # Need 0.5s of silence - balanced for natural speech
+                    if time_since_last_audio > 0.5 and time_since_speech_end > 0.2:
+                        logger.info(f"📤 Processing batch audio after {time_since_last_audio:.1f}s silence")
+                        await self.process_audio()
 
-                self._last_processed_transcript = transcript  # Track what we processed
-                self._last_process_time = time.time()  # Track WHEN we processed
-                self.current_transcript = ""  # Clear buffer
-                self.utterance_complete = False  # Reset for next utterance
-                logger.info(f"📝 Processing complete message: '{transcript}' (continuation={is_continuation})")
-                await self.process_transcript(transcript, is_continuation=is_continuation)
         except asyncio.CancelledError:
             logger.info("🛑 check_and_process task cancelled")
             raise
@@ -987,25 +1069,31 @@ class RealtimeVoiceSession:
         process_start = time.time()
 
         try:
+            # 🎯 Track what we're processing for duplicate detection
+            self._last_processed_transcript = transcript
+            self._last_process_time = time.time()
+
             # 🔄 RESTART LOOP - if user adds more input while thinking, restart
             while True:
-                # Check if we should restart with new input from current_transcript
+                # Check if we should restart with new input from buffer
                 if self.should_restart_thinking:
                     logger.info("🔄 Restart requested - collecting new input...")
 
                     # Wait briefly for new transcript (keep it fast!)
                     for _ in range(3):  # Wait up to 0.3 seconds max
                         await asyncio.sleep(0.1)
-                        if self.current_transcript.strip():
+                        if self.transcript_buffer:  # 🎯 Use buffer instead of current_transcript
                             break
                         if not self.user_is_speaking:
                             break
 
-                    new_input = self.current_transcript.strip()
-                    if new_input:
+                    # 🎯 Get new input from buffer (VAPI-style)
+                    if self.transcript_buffer:
+                        new_input = " ".join(self.transcript_buffer)
+                        self.transcript_buffer.clear()  # Clear buffer
                         self.current_transcript = ""
                         transcript = f"{transcript} {new_input}"
-                        logger.info(f"🔄 Combined input: '{transcript[:60]}...'")
+                        logger.info(f"🔄 Combined input from buffer: '{transcript[:60]}...'")
                     else:
                         logger.info(f"🔄 Restarting with: '{transcript[:60]}...'")
 
@@ -1027,6 +1115,7 @@ class RealtimeVoiceSession:
                     self.is_thinking = True
                     self.should_stop_speaking = False
                     self._is_restart_iteration = True  # Flag to replace user message on frontend
+                    self._last_processed_transcript = transcript  # Update tracking
 
                 # Calculate STT latency
                 stt_latency = int((time.time() - self.speech_start_time) * 1000) if self.speech_start_time else 0
@@ -2256,6 +2345,11 @@ class RealtimeVoiceSession:
         """Stop processing and cleanup"""
         if self.process_task:
             self.process_task.cancel()
+
+        # Cancel smart turn detection timer
+        if self.process_timer and not self.process_timer.done():
+            self.process_timer.cancel()
+            logger.info("⏰ Process timer cancelled on stop")
 
         # Close streaming STT (Deepgram)
         if self.streaming_stt:
