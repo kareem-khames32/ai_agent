@@ -693,38 +693,23 @@ class RealtimeVoiceSession:
 
             # 🎯 Buffer BOTH interim and final results
             # Azure Streaming often doesn't send final results, so we use interim too
-
-            # 🎯 KEY: Check if this is a continuation of previous speech
-            # If user paused briefly (< 1s) and continues, APPEND to existing transcript
-            time_since_last = time.time() - self.last_transcript_time if self.last_transcript_time else 999
-            is_continuation = (
-                time_since_last < 1.0 and  # Within 1 second continuation window
-                self.current_transcript.strip() and  # Have existing text
-                result.text.strip() and  # Have new text
-                not result.text.strip().startswith(self.current_transcript.strip()[:20])  # Not already included
-            )
+            #
+            # NOTE: We REPLACE (not append) because:
+            # 1. Streaming STT sends FULL accumulated text in each interim
+            # 2. After pause, STT may re-transcribe with corrections (مية → 100)
+            # 3. Appending causes duplication like "خلاص بدفع مية خلاص بدفع 100"
+            # The longer timeouts (800ms) will collect the full sentence naturally
 
             if result.is_final:
-                # Final result
-                if is_continuation:
-                    # Append to existing (user continued speaking after brief pause)
-                    self.current_transcript = f"{self.current_transcript.strip()} {result.text.strip()}"
-                    logger.info(f"📝 Final (appended): {self.current_transcript}")
-                else:
-                    self.current_transcript = result.text
-                    logger.info(f"📝 Final: {result.text}")
+                self.current_transcript = result.text
                 self.last_transcript_time = time.time()
                 self.utterance_complete = True
+                logger.info(f"📝 Final: {result.text}")
             else:
-                # Interim result - update current transcript (Azure often only sends these)
-                if is_continuation:
-                    # Append to existing (user continued speaking after brief pause)
-                    self.current_transcript = f"{self.current_transcript.strip()} {result.text.strip()}"
-                    logger.info(f"📝 Interim (appended): {self.current_transcript[:50]}...")
-                else:
-                    self.current_transcript = result.text
-                    logger.info(f"📝 Interim buffered: {result.text[:50]}...")
+                # Interim result - always replace (STT sends full text each time)
+                self.current_transcript = result.text
                 self.last_transcript_time = time.time()
+                logger.info(f"📝 Interim: {result.text[:50]}...")
         except Exception as e:
             logger.error(f"❌ Error in _on_transcript: {e}")
 
