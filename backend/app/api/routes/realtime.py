@@ -922,6 +922,8 @@ class RealtimeVoiceSession:
                 # 🎯 SMART CONTINUATION: If new transcript comes SHORTLY after we processed
                 # something, it's likely a continuation of the same sentence.
                 # User might pause 2-3 seconds while thinking, then continue.
+                is_continuation = False  # Track if this is a continuation
+
                 if hasattr(self, '_last_processed_transcript') and self._last_processed_transcript:
                     if transcript == self._last_processed_transcript:
                         # Exact duplicate - skip
@@ -933,6 +935,7 @@ class RealtimeVoiceSession:
                     time_since_last_process = time.time() - getattr(self, '_last_process_time', 0)
 
                     if time_since_last_process < 5.0:  # Within 5 seconds
+                        is_continuation = True  # Mark as continuation
                         # This is likely a CONTINUATION - user paused then continued
                         # Combine with what we last processed
                         if not transcript.startswith(self._last_processed_transcript):
@@ -953,8 +956,8 @@ class RealtimeVoiceSession:
                 self._last_process_time = time.time()  # Track WHEN we processed
                 self.current_transcript = ""  # Clear buffer
                 self.utterance_complete = False  # Reset for next utterance
-                logger.info(f"📝 Processing complete message: '{transcript}'")
-                await self.process_transcript(transcript)
+                logger.info(f"📝 Processing complete message: '{transcript}' (continuation={is_continuation})")
+                await self.process_transcript(transcript, is_continuation=is_continuation)
         except asyncio.CancelledError:
             logger.info("🛑 check_and_process task cancelled")
             raise
@@ -963,8 +966,14 @@ class RealtimeVoiceSession:
             import traceback
             traceback.print_exc()
 
-    async def process_transcript(self, transcript: str):
-        """Process transcript from streaming STT - FAST PATH with smart re-thinking"""
+    async def process_transcript(self, transcript: str, is_continuation: bool = False):
+        """Process transcript from streaming STT - FAST PATH with smart re-thinking
+
+        Args:
+            transcript: The user's speech text
+            is_continuation: If True, this is a continuation of previous speech,
+                           so frontend should REPLACE the last user message
+        """
         if self.is_processing:
             return
 
@@ -1025,13 +1034,16 @@ class RealtimeVoiceSession:
 
                 await self.client_ws.send_json({"type": "processing"})
 
-                # Send user transcript (with replace flag if this is a restart)
+                # Send user transcript (with replace flag if this is a restart or continuation)
+                should_replace = is_continuation or getattr(self, '_is_restart_iteration', False)
                 await self.client_ws.send_json({
                     "type": "transcript",
                     "role": "user",
                     "text": transcript,
-                    "replace": getattr(self, '_is_restart_iteration', False),  # Replace last user msg if restarting
+                    "replace": should_replace,  # Replace last user msg if continuation/restart
                 })
+                if should_replace:
+                    logger.info(f"📝 Sending with replace=True (continuation={is_continuation})")
                 self._is_restart_iteration = False  # Reset flag
 
                 # Add to conversation - combine with last user message if exists
