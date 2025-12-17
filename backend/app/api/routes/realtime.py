@@ -898,14 +898,16 @@ class RealtimeVoiceSession:
                 # STT sends: FINAL "إن شاء الله بسدد بعد" (WRONG!)
                 # Then: "شهرين يا باشا" comes as new utterance
                 #
-                # Solution: Ignore final/interim distinction completely.
-                # Wait for transcript to STABILIZE (no updates for 1.5s)
+                # Solution: Wait for STT to fully process the audio.
+                # STT can take 2-3 seconds to finalize the LAST part of speech.
+                # We must wait longer to ensure we get the complete transcript.
 
-                min_wait = 1.5  # 1.5 seconds - same for ALL cases
-
-                if time_since_last_transcript < min_wait:
+                # Wait 2s after last transcript (STT might send more)
+                if time_since_last_transcript < 2.0:
                     continue
-                if time_since_speech_end < min_wait:
+
+                # Wait 2.5s after speech ended (STT needs time to process final audio)
+                if time_since_speech_end < 2.5:
                     continue
 
                 # 🎯 FINAL CHECK before processing - user might have started speaking again!
