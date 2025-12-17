@@ -883,21 +883,24 @@ class RealtimeVoiceSession:
                     # No speech_ended event yet - keep waiting
                     continue
 
+                # 🎯 INCREASED TIMEOUTS for Arabic speech
+                # Natural pauses in Arabic can be 800-1200ms within sentences
+                # We need to wait long enough to not cut off mid-sentence
+
                 if self.utterance_complete:
                     # 🎯 Utterance complete (speech_final from STT)
-                    # Still wait for natural pause to catch continuation
-                    if time_since_last_transcript < 0.5:  # 500ms buffer
+                    # But STT might send "final" during brief pauses - still wait!
+                    if time_since_last_transcript < 0.8:  # 800ms buffer
                         continue
-                    if time_since_speech_end < 0.6:  # 600ms after speech ended
+                    if time_since_speech_end < 1.0:  # 1 second after speech ended
                         continue
                 else:
-                    # 🎯 No speech_final yet - wait longer for natural pause
-                    # Arabic speech has natural pauses of 500-800ms within sentences
-                    if time_since_last_audio < 0.8:  # 800ms for audio silence
+                    # 🎯 No speech_final yet - wait even longer
+                    if time_since_last_audio < 1.2:  # 1.2s for audio silence
                         continue
-                    if time_since_last_transcript < 0.7:  # 700ms for transcript
+                    if time_since_last_transcript < 1.0:  # 1s for transcript
                         continue
-                    if time_since_speech_end < 0.8:  # 800ms after VAD says speech ended
+                    if time_since_speech_end < 1.2:  # 1.2s after VAD says speech ended
                         continue
 
                 # User truly stopped - process the complete message!
