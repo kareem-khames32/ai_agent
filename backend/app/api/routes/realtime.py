@@ -883,25 +883,25 @@ class RealtimeVoiceSession:
                     # No speech_ended event yet - keep waiting
                     continue
 
-                # 🎯 INCREASED TIMEOUTS for Arabic speech
-                # Natural pauses in Arabic can be 800-1200ms within sentences
-                # We need to wait long enough to not cut off mid-sentence
+                # 🎯 UNIFIED TIMEOUT - Don't trust STT's "final" signal!
+                # STT sends "final" during brief pauses, which is unreliable.
+                # Use the SAME long timeout for ALL cases.
+                #
+                # Arabic speech has natural pauses of 1-2 seconds within sentences.
+                # We must wait long enough to ensure user is TRULY done.
 
-                if self.utterance_complete:
-                    # 🎯 Utterance complete (speech_final from STT)
-                    # But STT might send "final" during brief pauses - still wait!
-                    if time_since_last_transcript < 0.8:  # 800ms buffer
-                        continue
-                    if time_since_speech_end < 1.0:  # 1 second after speech ended
-                        continue
-                else:
-                    # 🎯 No speech_final yet - wait even longer
-                    if time_since_last_audio < 1.2:  # 1.2s for audio silence
-                        continue
-                    if time_since_last_transcript < 1.0:  # 1s for transcript
-                        continue
-                    if time_since_speech_end < 1.2:  # 1.2s after VAD says speech ended
-                        continue
+                # 🎯 Require ALL conditions to be met:
+                # - No audio for 1.5 seconds
+                # - No transcript update for 1.5 seconds
+                # - Speech ended 1.5 seconds ago
+                min_silence = 1.5  # 1.5 seconds - safe for Arabic speech
+
+                if time_since_last_audio < min_silence:
+                    continue
+                if time_since_last_transcript < min_silence:
+                    continue
+                if time_since_speech_end < min_silence:
+                    continue
 
                 # 🎯 FINAL CHECK before processing - user might have started speaking again!
                 # This prevents race condition where timeout passes but user resumes
