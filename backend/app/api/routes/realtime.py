@@ -1061,12 +1061,13 @@ class RealtimeVoiceSession:
 
                 if streaming_active:
                     # 🎯 STREAMING MODE: Timer-based processing handles everything
-                    # Just handle restart signaling when AI is busy
-                    if self.transcript_buffer and (self.is_speaking or self.is_processing or self.is_thinking):
-                        # User has buffered input while AI is busy - signal restart
+                    # Only signal restart when AI is THINKING (not speaking!)
+                    # If AI is speaking, user input is handled as interruption, not restart
+                    if self.transcript_buffer and self.is_thinking and not self.is_speaking:
+                        # User has buffered input while AI is thinking - signal restart
                         if not self.should_restart_thinking:
                             combined = " ".join(self.transcript_buffer)
-                            logger.info(f"🔄 User added more while AI busy: '{combined[:50]}...'")
+                            logger.info(f"🔄 User added more while AI thinking: '{combined[:50]}...'")
                             self.should_restart_thinking = True
                     continue
 
@@ -1219,9 +1220,13 @@ class RealtimeVoiceSession:
                     await self._process_non_streaming_response()
 
                 # If we didn't restart, we're done
-                if not self.should_restart_thinking:
+                # 🎯 FIX: Also exit if audio was sent (no restart after speaking!)
+                if not self.should_restart_thinking or self.first_audio_sent_this_turn:
+                    if self.first_audio_sent_this_turn and self.should_restart_thinking:
+                        logger.info("🔄 Skipping restart - audio was already sent this turn")
+                        self.should_restart_thinking = False  # Clear flag
                     break
-                # Otherwise continue loop for restart
+                # Otherwise continue loop for restart (only if no audio sent)
 
         except Exception as e:
             logger.error(f"Error processing transcript: {e}")
@@ -1496,9 +1501,10 @@ class RealtimeVoiceSession:
                         continue  # Skip this token
 
                 # 🔄 Check if user added more input while we're thinking
-                if self.should_restart_thinking and not self.is_speaking:
+                # Only restart if NO audio has been sent yet (prevents duplicate audio)
+                if self.should_restart_thinking and not self.is_speaking and not self.first_audio_sent_this_turn:
                     if not should_abort:
-                        logger.info("🔄 Restart thinking: skipping remaining tokens")
+                        logger.info("🔄 Restart thinking: skipping remaining tokens (no audio sent yet)")
                         should_abort = True
                     continue  # Skip this token
 
