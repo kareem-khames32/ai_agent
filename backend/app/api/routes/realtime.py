@@ -1407,9 +1407,11 @@ class RealtimeVoiceSession:
         last_stream_time = 0  # For throttling text_stream
 
         # Sentence endings - Arabic and English
-        SENTENCE_ENDINGS = ('.', '!', '?', '؟', '。', '،', ',')  # 🚀 Added comma for earlier splits
-        MIN_CHARS = 8  # 🚀 Reduced for faster TTS start (was 10)
-        MAX_WAIT_CHARS = 80  # 🚀 Force send sooner (was 150) - faster first audio
+        # 🎯 REMOVED comma (،) - it's mid-sentence in Arabic, not a sentence ending!
+        # Splitting on comma was causing AI to speak in small chunks
+        SENTENCE_ENDINGS = ('.', '!', '?', '؟', '。')
+        MIN_CHARS = 15  # 🎯 Increased to get fuller sentences (was 8)
+        MAX_WAIT_CHARS = 120  # 🎯 Increased to allow longer sentences (was 80)
 
         # Don't set is_speaking yet - wait until TTS actually starts
         self.should_stop_speaking = False
