@@ -897,8 +897,21 @@ class RealtimeVoiceSession:
             # Clear interim since we have final
             self.current_transcript = ""
 
-            # 1. Add to buffer (don't process yet!)
-            if not self.transcript_buffer or self.transcript_buffer[-1] != text:
+            # 1. Add to buffer - but check for duplicates from interim!
+            # If last buffer item is contained in this final, REPLACE it
+            if self.transcript_buffer:
+                last_text = self.transcript_buffer[-1]
+                # Remove punctuation for comparison
+                clean_last = last_text.rstrip('.!?؟،,')
+                clean_new = text.rstrip('.!?؟،,')
+
+                if clean_last in clean_new or clean_new in clean_last:
+                    # Final is same as interim - replace with final (has punctuation)
+                    self.transcript_buffer[-1] = text
+                    logger.info(f"📝 Replaced interim with final: '{text[:50]}...'")
+                elif last_text != text:
+                    self.transcript_buffer.append(text)
+            else:
                 self.transcript_buffer.append(text)
             self.last_transcript_time = time.time()
 
