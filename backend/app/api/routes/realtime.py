@@ -938,7 +938,7 @@ class RealtimeVoiceSession:
 
             # Check if AI is speaking - if so, this might be interruption
             if self.is_speaking:
-                complete_text = " ".join(self.transcript_buffer)
+                complete_text = self.transcript_buffer[-1]  # Take LAST (most complete)
                 # Only interrupt if it's not just a filler
                 if not self.turn_detector.is_filler_word(complete_text):
                     logger.info(f"🛑 User interrupted with: '{complete_text[:30]}...'")
@@ -950,8 +950,8 @@ class RealtimeVoiceSession:
                     self.transcript_buffer = []
                 return
 
-            # Collect the complete turn
-            complete_text = " ".join(self.transcript_buffer)
+            # Take the LAST transcript (most complete) - NOT join!
+            complete_text = self.transcript_buffer[-1]
             self.transcript_buffer = []  # Clear buffer
 
             # Skip if it's just a filler after AI just spoke
@@ -1073,8 +1073,8 @@ class RealtimeVoiceSession:
                 logger.info("⏰ Timer fired but user speaking - waiting...")
                 return
 
-            # 🎯 JOIN buffer into single transcript
-            combined_transcript = " ".join(self.transcript_buffer)
+            # 🎯 Take LAST transcript (most complete) - NOT join!
+            combined_transcript = self.transcript_buffer[-1]
             buffer_size = len(self.transcript_buffer)
 
             # Clear the buffer BEFORE processing to avoid duplicates
@@ -1191,7 +1191,7 @@ class RealtimeVoiceSession:
                     if self.transcript_buffer and self.is_thinking and not self.is_speaking:
                         # User has buffered input while AI is thinking - signal restart
                         if not self.should_restart_thinking:
-                            combined = " ".join(self.transcript_buffer)
+                            combined = self.transcript_buffer[-1]  # Take LAST
                             logger.info(f"🔄 User added more while AI thinking: '{combined[:50]}...'")
                             self.should_restart_thinking = True
                     continue
@@ -1263,7 +1263,7 @@ class RealtimeVoiceSession:
 
                     # 🎯 Get new input from buffer (VAPI-style)
                     if self.transcript_buffer:
-                        new_input = " ".join(self.transcript_buffer)
+                        new_input = self.transcript_buffer[-1]  # Take LAST (most complete) - NOT join!
                         self.transcript_buffer.clear()  # Clear buffer
                         self.current_transcript = ""
 
