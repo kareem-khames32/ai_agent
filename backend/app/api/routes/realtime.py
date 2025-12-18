@@ -662,19 +662,23 @@ class RealtimeVoiceSession:
         Returns shorter timeout for complete sentences, longer for incomplete.
         This ensures:
         - Fast response (~300ms) when user finishes a complete sentence
+        - Fast response (~300ms) for short acknowledgments (نعم، أيوة، تفضل)
         - Patient wait (~1.5s) when user is mid-sentence or pausing to think
 
         Logic:
         - Ends with punctuation (. ? ! ؟) → 0.3s (complete sentence)
+        - Short acknowledgment (نعم، أيوة، تفضل) → 0.3s (quick response)
         - Contains numbers → 0.5s (user might add more digits)
         - Ends with continuation word (و، يعني، بس) → 1.5s (incomplete)
         - Ends with ellipsis (...) → 1.5s (user thinking)
-        - Default → 0.8s (balanced)
+        - Default → 0.5s (faster response - was 0.8s)
         """
         if not text:
-            return 0.8  # Default
+            return 0.5  # Default (reduced from 0.8s)
 
         text = text.strip()
+        words = text.split()
+        word_count = len(words)
 
         # 🎯 FAST PATH: Complete sentence with punctuation
         # Arabic: ؟ (question mark), ، (comma), . (period)
@@ -683,6 +687,23 @@ class RealtimeVoiceSession:
         if text.endswith(end_punctuation):
             logger.info(f"⚡ Smart timeout: 0.3s (punctuation: '{text[-1]}')")
             return 0.3
+
+        # 🎯 FAST PATH: Short acknowledgments (1-2 words)
+        # These are common quick responses that should be processed fast
+        quick_responses = {
+            "نعم", "أيوة", "ايوة", "ايوه", "أيوه", "آه", "اه", "تمام", "ماشي",
+            "تفضل", "تفضلي", "اتفضل", "اتفضلي", "حاضر", "طيب", "أوكي", "اوكي",
+            "صح", "بالظبط", "معاك", "معاكي", "سامعك", "فاهم", "فاهمك",
+            "yes", "yeah", "ok", "okay", "sure", "go ahead", "right"
+        }
+        if word_count <= 3:
+            # Check if any quick response word is in the text
+            text_lower = text.lower()
+            for word in words:
+                clean_word = word.strip('،,.!?؟')
+                if clean_word in quick_responses:
+                    logger.info(f"⚡ Smart timeout: 0.3s (quick response: '{clean_word}')")
+                    return 0.3
 
         # 🎯 SLOW PATH: Incomplete sentence markers
         # Check if ends with ellipsis (thinking)
@@ -713,9 +734,10 @@ class RealtimeVoiceSession:
                 logger.info(f"⏳ Smart timeout: 0.5s (ends with number)")
                 return 0.5
 
-        # 🎯 DEFAULT: Balanced timeout
-        logger.info(f"⏱️ Smart timeout: 0.8s (default)")
-        return 0.8
+        # 🎯 DEFAULT: Faster timeout for better responsiveness
+        # Reduced from 0.8s to 0.5s to prevent combining separate sentences
+        logger.info(f"⏱️ Smart timeout: 0.5s (default)")
+        return 0.5
 
     async def _on_transcript(self, result: TranscriptResult):
         """Handle transcript from streaming STT with BACKCHANNEL DETECTION"""
