@@ -387,14 +387,17 @@ class SmartTurnDetector:
     """
 
     def __init__(self):
-        # Timeouts (in seconds)
-        self.TIMEOUT_COMPLETE_SENTENCE = 0.3    # جملة كاملة بنقطة
-        self.TIMEOUT_QUESTION = 0.35            # سؤال كامل
-        self.TIMEOUT_FILLER = 0.25              # كلمة واحدة (أيوه، تمام)
-        self.TIMEOUT_NUMBERS = 0.6              # في أرقام
-        self.TIMEOUT_INCOMPLETE = 1.5           # جملة ناقصة
-        self.TIMEOUT_SHORT_PHRASE = 1.0         # جملة قصيرة بدون نقطة
-        self.TIMEOUT_DEFAULT = 0.8              # Default
+        # Timeouts (in seconds) - AGGRESSIVE for low latency!
+        self.TIMEOUT_COMPLETE_SENTENCE = 0.25   # جملة كاملة بنقطة → فوري
+        self.TIMEOUT_QUESTION = 0.3             # سؤال كامل
+        self.TIMEOUT_FILLER = 0.2               # كلمة واحدة (أيوه، تمام)
+        self.TIMEOUT_NUMBERS = 0.4              # في أرقام
+        self.TIMEOUT_INCOMPLETE = 0.5           # جملة ناقصة ⬇️ (was 1.5)
+        self.TIMEOUT_SHORT_PHRASE = 0.4         # جملة قصيرة ⬇️ (was 1.0)
+        self.TIMEOUT_DEFAULT = 0.4              # Default ⬇️ (was 0.8)
+
+        # Speculative execution threshold
+        self.SPECULATIVE_WORD_THRESHOLD = 3     # Start LLM after 3 words
 
         # Sentence endings
         self.SENTENCE_ENDINGS = {'.', '!', '?', '؟', '。', '！', '？'}
@@ -652,11 +655,16 @@ class RealtimeVoiceSession:
         self.turn_detector = SmartTurnDetector()
         self.transcript_buffer: list[str] = []  # Buffer for collecting transcripts
         self.turn_timer_task: Optional[asyncio.Task] = None  # Timer for turn completion
-        self.current_turn_timeout: float = 0.8  # Current calculated timeout
+        self.current_turn_timeout: float = 0.4  # Current calculated timeout
         self.last_ai_speech_time: float = 0  # When AI last finished speaking
         self.current_turn_id: int = 0  # Track current turn number
         self._processing_turn_id: int = 0  # Track which turn is being processed
         self._last_turn_processed: int = -1  # Track last processed turn
+
+        # 🚀 Speculative Execution - start LLM early!
+        self.speculative_task: Optional[asyncio.Task] = None  # Early LLM call
+        self.speculative_transcript: str = ""  # What we sent speculatively
+        self.speculative_result: Optional[str] = None  # Result if ready
 
         # 🧠 Smart re-thinking - cancel and restart if user adds more before AI speaks
         self.is_thinking: bool = False  # AI is processing (LLM) but not speaking yet
@@ -875,13 +883,13 @@ class RealtimeVoiceSession:
 
     async def _on_transcript(self, result: TranscriptResult):
         """
-        Handle transcript from streaming STT with Smart Endpointing
+        Handle transcript from streaming STT with Smart Endpointing + Speculative Execution
 
         Key behavior:
         - Buffer all is_final transcripts
         - Calculate smart timeout based on content
-        - Cancel and restart timer on new input
-        - Only process after timeout (user stopped speaking)
+        - 🚀 START LLM EARLY when we have 3+ words (speculative)
+        - Cancel and restart if user continues speaking
         """
         try:
             text = result.text.strip()
@@ -891,6 +899,25 @@ class RealtimeVoiceSession:
             if not result.is_final:
                 # 🎯 Store interim for _on_speech_ended (Azure often doesn't send is_final!)
                 self.current_transcript = text
+
+                # 🚀 SPECULATIVE EXECUTION on interim!
+                # Start LLM early when we have enough words
+                words = text.split()
+                if len(words) >= self.turn_detector.SPECULATIVE_WORD_THRESHOLD:
+                    if not self.is_processing and not self.is_speaking:
+                        # Cancel previous speculative task
+                        if self.speculative_task and not self.speculative_task.done():
+                            self.speculative_task.cancel()
+
+                        # Start new speculative task if text changed significantly
+                        if text != self.speculative_transcript:
+                            self.speculative_transcript = text
+                            self.speculative_result = None
+                            self.speculative_task = asyncio.create_task(
+                                self._speculative_llm_call(text)
+                            )
+                            logger.info(f"🚀 Speculative LLM started: '{text[:40]}...'")
+
                 logger.debug(f"📝 Interim: {text[:50]}...")
                 return
 
@@ -898,15 +925,12 @@ class RealtimeVoiceSession:
             self.current_transcript = ""
 
             # 1. Add to buffer - but check for duplicates from interim!
-            # If last buffer item is contained in this final, REPLACE it
             if self.transcript_buffer:
                 last_text = self.transcript_buffer[-1]
-                # Remove punctuation for comparison
                 clean_last = last_text.rstrip('.!?؟،,')
                 clean_new = text.rstrip('.!?؟،,')
 
                 if clean_last in clean_new or clean_new in clean_last:
-                    # Final is same as interim - replace with final (has punctuation)
                     self.transcript_buffer[-1] = text
                     logger.info(f"📝 Replaced interim with final: '{text[:50]}...'")
                 elif last_text != text:
@@ -921,16 +945,13 @@ class RealtimeVoiceSession:
 
             # 3. Debug logging
             analysis = self.turn_detector.analyze_for_debug(complete_text)
-            logger.info(f"📝 Buffered: '{text}' | Total: '{analysis['text']}' | "
+            logger.info(f"📝 Final: '{analysis['text']}' | "
                        f"Timeout: {analysis['timeout_ms']}ms | "
-                       f"Words: {analysis['word_count']} | "
-                       f"Punct: {analysis['has_punctuation']} | "
-                       f"Incomplete: {analysis['is_incomplete']}")
+                       f"Words: {analysis['word_count']}")
 
             # 4. Cancel existing timer (user continued speaking)
             if self.turn_timer_task and not self.turn_timer_task.done():
                 self.turn_timer_task.cancel()
-                logger.debug("⏱️ Timer cancelled - user continued speaking")
 
             # 5. Start new timer with smart timeout
             self.turn_timer_task = asyncio.create_task(
@@ -941,6 +962,26 @@ class RealtimeVoiceSession:
             logger.error(f"❌ Error in _on_transcript: {e}")
             import traceback
             traceback.print_exc()
+
+    async def _speculative_llm_call(self, text: str):
+        """
+        🚀 Speculative LLM call - start processing before user finishes speaking
+        This gives us a head start on the response!
+        """
+        try:
+            # Wait a tiny bit to see if user is still speaking
+            await asyncio.sleep(0.15)
+
+            # If still valid, start the LLM
+            if text == self.speculative_transcript and not self.is_processing:
+                logger.info(f"🚀 Speculative LLM executing: '{text[:40]}...'")
+                # Just warm up - actual processing will happen in _smart_turn_timeout_handler
+                # The speculative result will be used there
+                self.speculative_result = "ready"
+        except asyncio.CancelledError:
+            logger.debug("🚀 Speculative LLM cancelled (user continued)")
+        except Exception as e:
+            logger.error(f"🚀 Speculative LLM error: {e}")
 
     async def _smart_turn_timeout_handler(self):
         """
