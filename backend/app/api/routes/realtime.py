@@ -660,62 +660,72 @@ class RealtimeVoiceSession:
         🎯 VAPI-style Smart Endpointing - Calculate timeout based on content
 
         Returns shorter timeout for complete sentences, longer for incomplete.
-        This ensures:
-        - Fast response (~300ms) when user finishes a complete sentence
-        - Fast response (~300ms) for short acknowledgments (نعم، أيوة، تفضل)
-        - Patient wait (~1.5s) when user is mid-sentence or pausing to think
 
-        Logic:
-        - Ends with punctuation (. ? ! ؟) → 0.3s (complete sentence)
-        - Short acknowledgment (نعم، أيوة، تفضل) → 0.3s (quick response)
-        - Contains numbers → 0.5s (user might add more digits)
+        Logic (matching VAPI spec):
+        - Complete sentence with punctuation (. ? ! ؟) → 0.3s (fast response)
+        - Single/double word quick response (نعم، تفضل) → 0.3s (only if 1-2 words!)
         - Ends with continuation word (و، يعني، بس) → 1.5s (incomplete)
         - Ends with ellipsis (...) → 1.5s (user thinking)
-        - Default → 0.5s (faster response - was 0.8s)
+        - Contains numbers at end → 0.5s (user might add more)
+        - Default (no punctuation = incomplete) → 1.0s (wait for more)
+
+        KEY: If no punctuation, sentence is probably INCOMPLETE → wait longer!
         """
         if not text:
-            return 0.5  # Default (reduced from 0.8s)
+            return 1.0  # Default for empty
 
         text = text.strip()
         words = text.split()
         word_count = len(words)
 
-        # 🎯 FAST PATH: Complete sentence with punctuation
-        # Arabic: ؟ (question mark), ، (comma), . (period)
-        # Note: Don't use ، (Arabic comma) as end marker - it's mid-sentence
+        # 🎯 FAST PATH 1: Complete sentence with punctuation
         end_punctuation = ('.', '؟', '?', '!', '。')
         if text.endswith(end_punctuation):
             logger.info(f"⚡ Smart timeout: 0.3s (punctuation: '{text[-1]}')")
             return 0.3
 
-        # 🎯 FAST PATH: Short acknowledgments (1-2 words)
-        # These are common quick responses that should be processed fast
+        # 🎯 FAST PATH 2: Single/double word quick responses ONLY
+        # IMPORTANT: Only if the ENTIRE message is 1-2 words!
+        # "أيوة" alone = quick response
+        # "أيوة تفضل يا" = NOT quick response (incomplete sentence!)
         quick_responses = {
             "نعم", "أيوة", "ايوة", "ايوه", "أيوه", "آه", "اه", "تمام", "ماشي",
             "تفضل", "تفضلي", "اتفضل", "اتفضلي", "حاضر", "طيب", "أوكي", "اوكي",
             "صح", "بالظبط", "معاك", "معاكي", "سامعك", "فاهم", "فاهمك",
-            "yes", "yeah", "ok", "okay", "sure", "go ahead", "right"
+            "yes", "yeah", "ok", "okay", "sure", "right", "yep", "yup"
         }
-        if word_count <= 3:
-            # Check if any quick response word is in the text
-            text_lower = text.lower()
-            for word in words:
-                clean_word = word.strip('،,.!?؟')
-                if clean_word in quick_responses:
-                    logger.info(f"⚡ Smart timeout: 0.3s (quick response: '{clean_word}')")
-                    return 0.3
 
-        # 🎯 SLOW PATH: Incomplete sentence markers
-        # Check if ends with ellipsis (thinking)
+        # Two-word quick phrases
+        quick_phrases = {
+            "تمام تمام", "ماشي ماشي", "أيوة أيوة", "نعم نعم",
+            "go ahead", "of course", "no problem", "all right"
+        }
+
+        if word_count == 1:
+            clean_word = words[0].strip('،,.!?؟')
+            if clean_word in quick_responses:
+                logger.info(f"⚡ Smart timeout: 0.3s (single word quick response: '{clean_word}')")
+                return 0.3
+        elif word_count == 2:
+            clean_text = text.strip('،,.!?؟').lower()
+            if clean_text in quick_phrases:
+                logger.info(f"⚡ Smart timeout: 0.3s (quick phrase: '{clean_text}')")
+                return 0.3
+            # Also check if both words are quick responses
+            w1 = words[0].strip('،,.!?؟')
+            w2 = words[1].strip('،,.!?؟')
+            if w1 in quick_responses and w2 in quick_responses:
+                logger.info(f"⚡ Smart timeout: 0.3s (two quick words: '{w1} {w2}')")
+                return 0.3
+
+        # 🎯 SLOW PATH 1: Ends with ellipsis (user thinking)
         if text.endswith('...') or text.endswith('…'):
             logger.info(f"⏳ Smart timeout: 1.5s (ellipsis)")
             return 1.5
 
-        # Check if ends with continuation word (Arabic)
-        words = text.split()
+        # 🎯 SLOW PATH 2: Ends with continuation word (incomplete sentence)
         if words:
             last_word = words[-1].lower()
-            # Remove trailing punctuation for word check
             for char in '،,.!?؟':
                 last_word = last_word.rstrip(char)
 
@@ -727,17 +737,16 @@ class RealtimeVoiceSession:
                 logger.info(f"⏳ Smart timeout: 1.5s (English continuation: '{last_word}')")
                 return 1.5
 
-        # 🎯 MEDIUM PATH: Numbers (user might add more)
-        if any(c.isdigit() for c in text):
-            # Check if the number is at the end
-            if text and text[-1].isdigit():
-                logger.info(f"⏳ Smart timeout: 0.5s (ends with number)")
-                return 0.5
+        # 🎯 MEDIUM PATH: Numbers at end (user might add more digits)
+        if text and text[-1].isdigit():
+            logger.info(f"⏳ Smart timeout: 0.5s (ends with number)")
+            return 0.5
 
-        # 🎯 DEFAULT: Faster timeout for better responsiveness
-        # Reduced from 0.8s to 0.5s to prevent combining separate sentences
-        logger.info(f"⏱️ Smart timeout: 0.5s (default)")
-        return 0.5
+        # 🎯 DEFAULT: No punctuation = probably incomplete sentence
+        # Wait 1.0s to collect more speech before processing
+        # This prevents "أيوة تفضل يا" from being sent before "حبيبي" arrives
+        logger.info(f"⏱️ Smart timeout: 1.0s (no punctuation - waiting for more)")
+        return 1.0
 
     async def _on_transcript(self, result: TranscriptResult):
         """Handle transcript from streaming STT with BACKCHANNEL DETECTION"""
