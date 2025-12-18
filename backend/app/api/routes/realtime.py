@@ -884,14 +884,18 @@ class RealtimeVoiceSession:
         - Only process after timeout (user stopped speaking)
         """
         try:
-            if not result.is_final:
-                # Interim - just log for debugging
-                logger.debug(f"📝 Interim: {result.text[:50]}...")
-                return
-
             text = result.text.strip()
             if not text:
                 return
+
+            if not result.is_final:
+                # 🎯 Store interim for _on_speech_ended (Azure often doesn't send is_final!)
+                self.current_transcript = text
+                logger.debug(f"📝 Interim: {text[:50]}...")
+                return
+
+            # Clear interim since we have final
+            self.current_transcript = ""
 
             # 1. Add to buffer (don't process yet!)
             if not self.transcript_buffer or self.transcript_buffer[-1] != text:
@@ -2558,9 +2562,9 @@ class RealtimeVoiceSession:
             self.process_task.cancel()
 
         # Cancel smart turn detection timer
-        if self.process_timer and not self.process_timer.done():
-            self.process_timer.cancel()
-            logger.info("⏰ Process timer cancelled on stop")
+        if self.turn_timer_task and not self.turn_timer_task.done():
+            self.turn_timer_task.cancel()
+            logger.info("⏰ Turn timer cancelled on stop")
 
         # Close streaming STT (Deepgram)
         if self.streaming_stt:
