@@ -517,6 +517,7 @@ class RealtimeVoiceSession:
         self.process_timer: Optional[asyncio.Task] = None  # Cancellable timer for delayed processing
         self.current_turn_id: int = 0  # Increments when new turn starts (prevents cross-turn issues)
         self._last_turn_processed: int = -1  # Track which turn was last processed
+        self._processing_turn_id: int = -1  # Track which turn is CURRENTLY being processed (for late STT)
 
         # 🎯 Smart timeout configuration - words that indicate incomplete sentence
         self.continuation_words_ar = {
@@ -759,19 +760,27 @@ class RealtimeVoiceSession:
                         self.interrupt_word_count >= self.interruption_words_threshold
                     )
 
-                    # 🎯 KEY FIX: Only interrupt if first audio was actually sent!
-                    # This ensures user gets to hear at least some response
-                    if should_interrupt and self.first_audio_sent_this_turn and not self.should_stop_speaking:
+                    # 🎯 KEY FIX: Ignore late STT results from the SAME turn being processed!
+                    # Azure STT is slow and sends final transcript 3-4 seconds after speech ended.
+                    # If we're processing turn #1 and get a late final for turn #1, DON'T interrupt!
+                    # Only interrupt if this is from a NEW turn (user started speaking again).
+                    is_new_turn = self.current_turn_id > self._processing_turn_id
+                    ai_currently_busy = self.is_speaking or self.is_thinking
+
+                    if not is_new_turn and ai_currently_busy:
+                        logger.info(f"⏳ Ignoring late STT from same turn #{self.current_turn_id} (processing #{self._processing_turn_id})")
+                        # Don't interrupt - just buffer for potential later use
+                    elif should_interrupt and self.first_audio_sent_this_turn and not self.should_stop_speaking:
                         if self.is_speaking:
                             self.should_stop_speaking = True
                             self.audio_only_stop = True
-                            logger.info(f"🛑 Word-threshold ({self.interrupt_word_count}) reached: stopping AUDIO")
+                            logger.info(f"🛑 Word-threshold ({self.interrupt_word_count}) reached from NEW turn #{self.current_turn_id}: stopping AUDIO")
                             await self.client_ws.send_json({"type": "stop_audio"})
                         elif self.is_thinking:
                             self.should_stop_speaking = True
                             self.audio_only_stop = False
                             self.should_restart_thinking = True
-                            logger.info(f"🛑 Word-threshold ({self.interrupt_word_count}) reached: restarting THINKING")
+                            logger.info(f"🛑 Word-threshold ({self.interrupt_word_count}) reached from NEW turn #{self.current_turn_id}: restarting THINKING")
                             await self.client_ws.send_json({"type": "interrupted"})
 
             # 🎯 Only skip backchannels when AI is ACTIVELY speaking/thinking
@@ -1118,6 +1127,9 @@ class RealtimeVoiceSession:
             # 🎯 Track what we're processing for duplicate detection
             self._last_processed_transcript = transcript
             self._last_process_time = time.time()
+            # 🎯 Track which turn we're processing (to ignore late STT from same turn)
+            self._processing_turn_id = self.current_turn_id
+            logger.info(f"🎯 Processing turn #{self._processing_turn_id}")
 
             # 🔄 RESTART LOOP - if user adds more input while thinking, restart
             while True:
