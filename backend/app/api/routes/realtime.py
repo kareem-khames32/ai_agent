@@ -883,13 +883,7 @@ class RealtimeVoiceSession:
 
     async def _on_transcript(self, result: TranscriptResult):
         """
-        Handle transcript from streaming STT with Smart Endpointing + Speculative Execution
-
-        Key behavior:
-        - Buffer all is_final transcripts
-        - Calculate smart timeout based on content
-        - 🚀 START LLM EARLY when we have 3+ words (speculative)
-        - Cancel and restart if user continues speaking
+        SIMPLE: One transcript per turn. Always REPLACE, never APPEND.
         """
         try:
             text = result.text.strip()
@@ -897,91 +891,29 @@ class RealtimeVoiceSession:
                 return
 
             if not result.is_final:
-                # 🎯 Store interim for _on_speech_ended (Azure often doesn't send is_final!)
+                # Just store latest interim (Azure cumulative - each contains all previous)
                 self.current_transcript = text
-
-                # 🚀 SPECULATIVE EXECUTION on interim!
-                # Start LLM early when we have enough words
-                words = text.split()
-                if len(words) >= self.turn_detector.SPECULATIVE_WORD_THRESHOLD:
-                    if not self.is_processing and not self.is_speaking:
-                        # Cancel previous speculative task
-                        if self.speculative_task and not self.speculative_task.done():
-                            self.speculative_task.cancel()
-
-                        # Start new speculative task if text changed significantly
-                        if text != self.speculative_transcript:
-                            self.speculative_transcript = text
-                            self.speculative_result = None
-                            self.speculative_task = asyncio.create_task(
-                                self._speculative_llm_call(text)
-                            )
-                            logger.info(f"🚀 Speculative LLM started: '{text[:40]}...'")
-
                 logger.debug(f"📝 Interim: {text[:50]}...")
                 return
 
-            # Clear interim since we have final
+            # is_final: THIS IS THE TRANSCRIPT. Replace everything.
             self.current_transcript = ""
-
-            # 1. Add to buffer - but check for duplicates from interim!
-            if self.transcript_buffer:
-                last_text = self.transcript_buffer[-1]
-                clean_last = last_text.rstrip('.!?؟،,')
-                clean_new = text.rstrip('.!?؟،,')
-
-                if clean_last in clean_new or clean_new in clean_last:
-                    self.transcript_buffer[-1] = text
-                    logger.info(f"📝 Replaced interim with final: '{text[:50]}...'")
-                elif last_text != text:
-                    self.transcript_buffer.append(text)
-            else:
-                self.transcript_buffer.append(text)
+            self.transcript_buffer = [text]  # REPLACE, not append!
             self.last_transcript_time = time.time()
 
-            # 2. Build complete text and analyze
-            complete_text = " ".join(self.transcript_buffer)
-            self.current_turn_timeout = self.turn_detector.calculate_timeout(complete_text)
+            self.current_turn_timeout = self.turn_detector.calculate_timeout(text)
+            logger.info(f"📝 Final: '{text[:50]}...' | {int(self.current_turn_timeout * 1000)}ms")
 
-            # 3. Debug logging
-            analysis = self.turn_detector.analyze_for_debug(complete_text)
-            logger.info(f"📝 Final: '{analysis['text']}' | "
-                       f"Timeout: {analysis['timeout_ms']}ms | "
-                       f"Words: {analysis['word_count']}")
-
-            # 4. Cancel existing timer (user continued speaking)
+            # Cancel existing timer and start new one
             if self.turn_timer_task and not self.turn_timer_task.done():
                 self.turn_timer_task.cancel()
 
-            # 5. Start new timer with smart timeout
             self.turn_timer_task = asyncio.create_task(
                 self._smart_turn_timeout_handler()
             )
 
         except Exception as e:
             logger.error(f"❌ Error in _on_transcript: {e}")
-            import traceback
-            traceback.print_exc()
-
-    async def _speculative_llm_call(self, text: str):
-        """
-        🚀 Speculative LLM call - start processing before user finishes speaking
-        This gives us a head start on the response!
-        """
-        try:
-            # Wait a tiny bit to see if user is still speaking
-            await asyncio.sleep(0.15)
-
-            # If still valid, start the LLM
-            if text == self.speculative_transcript and not self.is_processing:
-                logger.info(f"🚀 Speculative LLM executing: '{text[:40]}...'")
-                # Just warm up - actual processing will happen in _smart_turn_timeout_handler
-                # The speculative result will be used there
-                self.speculative_result = "ready"
-        except asyncio.CancelledError:
-            logger.debug("🚀 Speculative LLM cancelled (user continued)")
-        except Exception as e:
-            logger.error(f"🚀 Speculative LLM error: {e}")
 
     async def _smart_turn_timeout_handler(self):
         """
@@ -1068,50 +1000,27 @@ class RealtimeVoiceSession:
             logger.error(f"❌ Error in _on_speech_started: {e}")
 
     async def _on_speech_ended(self):
-        """User stopped speaking - timer system handles processing"""
+        """User stopped speaking - use interim ONLY if no is_final yet"""
         try:
             self.user_is_speaking = False
             self.last_speech_end_time = time.time()
             logger.info("🔇 Speech ended")
 
-            # 🎯 AZURE FIX: Azure STT sends cumulative interim results
-            # Each interim contains ALL previous speech, so REPLACE not APPEND
-            if self.current_transcript.strip():
+            # SIMPLE: Only use interim if buffer is empty (no is_final arrived)
+            if self.current_transcript.strip() and not self.transcript_buffer:
                 text = self.current_transcript.strip()
-
-                if self.transcript_buffer:
-                    last_text = self.transcript_buffer[-1]
-                    # Remove punctuation for comparison
-                    clean_last = last_text.rstrip('.!?؟،,')
-                    clean_new = text.rstrip('.!?؟،,')
-
-                    if clean_last in clean_new:
-                        # New interim contains old - REPLACE (cumulative)
-                        self.transcript_buffer[-1] = text
-                        logger.info(f"📝 Replaced with cumulative: '{text[:40]}...'")
-                    elif clean_new in clean_last:
-                        # Old contains new - keep old (probably already final)
-                        logger.debug(f"📝 Keeping existing: '{last_text[:40]}...'")
-                    elif last_text != text:
-                        # Completely different - append
-                        self.transcript_buffer.append(text)
-                        logger.info(f"📝 Buffer appended: '{text[:40]}...'")
-                else:
-                    self.transcript_buffer.append(text)
-                    logger.info(f"📝 Buffer started: '{text[:40]}...'")
-
+                self.transcript_buffer = [text]  # Set as the transcript
                 self.current_transcript = ""
+                logger.info(f"📝 Using interim: '{text[:40]}...'")
 
-            # Start timer if buffer has content and no timer running
-            ai_is_busy = self.is_speaking or self.is_thinking or self.is_processing
-            if self.transcript_buffer and not ai_is_busy:
-                if not self.turn_timer_task or self.turn_timer_task.done():
-                    complete_text = " ".join(self.transcript_buffer)
-                    self.current_turn_timeout = self.turn_detector.calculate_timeout(complete_text)
+                # Start timer
+                ai_is_busy = self.is_speaking or self.is_thinking or self.is_processing
+                if not ai_is_busy:
+                    self.current_turn_timeout = self.turn_detector.calculate_timeout(text)
                     self.turn_timer_task = asyncio.create_task(
                         self._smart_turn_timeout_handler()
                     )
-                    logger.info(f"⏰ Timer started on speech_end: {int(self.current_turn_timeout * 1000)}ms")
+                    logger.info(f"⏰ Timer: {int(self.current_turn_timeout * 1000)}ms")
 
             await self.client_ws.send_json({"type": "speech_ended"})
         except Exception as e:
