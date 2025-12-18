@@ -1033,13 +1033,32 @@ class RealtimeVoiceSession:
             self.last_speech_end_time = time.time()
             logger.info("🔇 Speech ended")
 
-            # 🎯 AZURE FIX: Azure STT often doesn't send is_final!
-            # Add any pending interim transcript to buffer
+            # 🎯 AZURE FIX: Azure STT sends cumulative interim results
+            # Each interim contains ALL previous speech, so REPLACE not APPEND
             if self.current_transcript.strip():
                 text = self.current_transcript.strip()
-                if not self.transcript_buffer or self.transcript_buffer[-1] != text:
+
+                if self.transcript_buffer:
+                    last_text = self.transcript_buffer[-1]
+                    # Remove punctuation for comparison
+                    clean_last = last_text.rstrip('.!?؟،,')
+                    clean_new = text.rstrip('.!?؟،,')
+
+                    if clean_last in clean_new:
+                        # New interim contains old - REPLACE (cumulative)
+                        self.transcript_buffer[-1] = text
+                        logger.info(f"📝 Replaced with cumulative: '{text[:40]}...'")
+                    elif clean_new in clean_last:
+                        # Old contains new - keep old (probably already final)
+                        logger.debug(f"📝 Keeping existing: '{last_text[:40]}...'")
+                    elif last_text != text:
+                        # Completely different - append
+                        self.transcript_buffer.append(text)
+                        logger.info(f"📝 Buffer appended: '{text[:40]}...'")
+                else:
                     self.transcript_buffer.append(text)
-                    logger.info(f"📝 Buffer from interim: '{text}'")
+                    logger.info(f"📝 Buffer started: '{text[:40]}...'")
+
                 self.current_transcript = ""
 
             # Start timer if buffer has content and no timer running
