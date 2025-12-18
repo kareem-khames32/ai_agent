@@ -515,6 +515,8 @@ class RealtimeVoiceSession:
         # 🎯 VAPI-style Smart Turn Detection - Buffer-based with smart timeouts
         self.transcript_buffer: list[str] = []  # Buffer to collect transcript segments
         self.process_timer: Optional[asyncio.Task] = None  # Cancellable timer for delayed processing
+        self.current_turn_id: int = 0  # Increments when new turn starts (prevents cross-turn issues)
+        self._last_turn_processed: int = -1  # Track which turn was last processed
 
         # 🎯 Smart timeout configuration - words that indicate incomplete sentence
         self.continuation_words_ar = {
@@ -817,9 +819,9 @@ class RealtimeVoiceSession:
                 # Don't start timer if AI is busy (will be handled by restart logic)
                 if not ai_is_busy:
                     self.process_timer = asyncio.create_task(
-                        self._delayed_process(timeout)
+                        self._delayed_process(timeout, turn_id=self.current_turn_id)
                     )
-                    logger.info(f"⏰ Timer started: {timeout}s for '{combined_text[:40]}...'")
+                    logger.info(f"⏰ Timer started: {timeout}s for turn #{self.current_turn_id}: '{combined_text[:40]}...'")
                 else:
                     logger.info(f"🔄 AI busy, buffering for restart: '{text[:40]}...'")
 
@@ -852,11 +854,13 @@ class RealtimeVoiceSession:
             # We must clear the buffer to avoid combining with old transcript
             ai_is_busy = self.is_speaking or self.is_thinking or self.is_processing
             if not ai_is_busy:
+                # 🎯 INCREMENT TURN ID for new turn
+                self.current_turn_id += 1
                 if self.transcript_buffer:
                     logger.info(f"🗑️ Clearing old buffer ({len(self.transcript_buffer)} items) - new turn starting")
                 self.transcript_buffer.clear()
                 self.current_transcript = ""
-                logger.info(f"🎤 Speech started - AI not busy, NEW turn (buffer cleared)")
+                logger.info(f"🎤 Speech started - NEW TURN #{self.current_turn_id} (buffer cleared)")
             else:
                 logger.info(f"🎤 Speech started while AI busy - waiting for transcript to classify")
 
@@ -889,15 +893,15 @@ class RealtimeVoiceSession:
                     combined_text = " ".join(self.transcript_buffer)
                     timeout = self.calculate_smart_timeout(combined_text)
                     self.process_timer = asyncio.create_task(
-                        self._delayed_process(timeout)
+                        self._delayed_process(timeout, turn_id=self.current_turn_id)
                     )
-                    logger.info(f"⏰ Timer started on speech_end: {timeout}s for '{combined_text[:40]}...'")
+                    logger.info(f"⏰ Timer started on speech_end: {timeout}s for turn #{self.current_turn_id}: '{combined_text[:40]}...'")
 
             await self.client_ws.send_json({"type": "speech_ended"})
         except Exception as e:
             logger.error(f"❌ Error in _on_speech_ended: {e}")
 
-    async def _delayed_process(self, timeout: float):
+    async def _delayed_process(self, timeout: float, turn_id: int = None):
         """
         🎯 VAPI-style Delayed Processing
 
@@ -908,10 +912,26 @@ class RealtimeVoiceSession:
         The magic: If user says more within the timeout, the timer gets
         cancelled and restarted. Only when user is truly done (timeout
         completes) do we process the full combined message.
+
+        Args:
+            timeout: Seconds to wait before processing
+            turn_id: The turn ID when this timer was started (prevents stale processing)
         """
         try:
-            logger.info(f"⏳ Waiting {timeout}s before processing...")
+            # Capture turn ID if not provided
+            timer_turn_id = turn_id if turn_id is not None else self.current_turn_id
+            logger.info(f"⏳ Waiting {timeout}s before processing (turn #{timer_turn_id})...")
             await asyncio.sleep(timeout)
+
+            # 🎯 TURN SAFETY: Check if this timer is for current turn
+            if timer_turn_id != self.current_turn_id:
+                logger.info(f"⏰ Timer for turn #{timer_turn_id} fired but we're on turn #{self.current_turn_id} - skipping stale timer")
+                return
+
+            # 🎯 DUPLICATE PREVENTION: Check if this turn was already processed
+            if timer_turn_id == self._last_turn_processed:
+                logger.info(f"⏰ Turn #{timer_turn_id} already processed - skipping duplicate")
+                return
 
             # 🎯 After timeout: Check if there's anything to process
             if not self.transcript_buffer:
@@ -941,7 +961,9 @@ class RealtimeVoiceSession:
                 logger.info(f"⏰ Skipping duplicate: '{combined_transcript[:40]}...'")
                 return
 
-            logger.info(f"⏰ Timer fired! Processing {buffer_size} segments: '{combined_transcript[:50]}...'")
+            # 🎯 Mark this turn as processed
+            self._last_turn_processed = timer_turn_id
+            logger.info(f"⏰ Turn #{timer_turn_id} fired! Processing {buffer_size} segments: '{combined_transcript[:50]}...'")
 
             # 🎯 Process the combined transcript as a single message
             await self.process_transcript(combined_transcript, is_continuation=False)
@@ -1115,10 +1137,22 @@ class RealtimeVoiceSession:
                         new_input = " ".join(self.transcript_buffer)
                         self.transcript_buffer.clear()  # Clear buffer
                         self.current_transcript = ""
-                        transcript = f"{transcript} {new_input}"
-                        logger.info(f"🔄 Combined input from buffer: '{transcript[:60]}...'")
+
+                        # 🎯 FIX: Only combine if new input is actually NEW (not duplicate)
+                        # This prevents AI from repeating itself when same text arrives again
+                        if new_input not in transcript:
+                            transcript = f"{transcript} {new_input}"
+                            logger.info(f"🔄 Combined input from buffer: '{transcript[:60]}...'")
+                        else:
+                            logger.info(f"🔄 Skipping duplicate input: '{new_input[:40]}...'")
+                            self.should_restart_thinking = False
+                            continue  # Don't restart with duplicate
                     else:
-                        logger.info(f"🔄 Restarting with: '{transcript[:60]}...'")
+                        # 🎯 FIX: NO new input means user didn't add anything
+                        # Don't restart with same transcript - just continue!
+                        logger.info(f"🔄 No new input in buffer - skipping restart")
+                        self.should_restart_thinking = False
+                        continue  # Don't restart without new input
 
                     # 🎯 Remove BOTH the partial assistant response AND the old user message
                     # to start fresh with the combined transcript
@@ -1158,14 +1192,18 @@ class RealtimeVoiceSession:
                     logger.info(f"📝 Sending with replace=True (continuation={is_continuation})")
                 self._is_restart_iteration = False  # Reset flag
 
-                # Add to conversation - combine with last user message if exists
-                if self.messages and self.messages[-1].role == "user":
-                    # Combine with previous user message
+                # Add to conversation
+                # 🎯 FIX: Only combine with previous user message if this is a CONTINUATION
+                # Otherwise, each turn should be a separate message!
+                if is_continuation and self.messages and self.messages[-1].role == "user":
+                    # Combine with previous user message (same turn continuation)
                     combined = self.messages[-1].content + " " + transcript
                     self.messages[-1] = Message(role="user", content=combined)
-                    logger.info(f"🔗 Combined user messages: '{combined[:60]}...'")
+                    logger.info(f"🔗 Combined (continuation): '{combined[:60]}...'")
                 else:
+                    # New turn - create new message (DON'T combine!)
                     self.messages.append(Message(role="user", content=transcript))
+                    logger.info(f"📝 New turn message: '{transcript[:60]}...'")
 
                 # Track STT cost with model for accurate pricing
                 audio_duration = len(self.audio_buffer) / (16000 * 2) if self.audio_buffer else 1.0
