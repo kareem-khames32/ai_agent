@@ -654,6 +654,9 @@ class RealtimeVoiceSession:
         self.turn_timer_task: Optional[asyncio.Task] = None  # Timer for turn completion
         self.current_turn_timeout: float = 0.8  # Current calculated timeout
         self.last_ai_speech_time: float = 0  # When AI last finished speaking
+        self.current_turn_id: int = 0  # Track current turn number
+        self._processing_turn_id: int = 0  # Track which turn is being processed
+        self._last_turn_processed: int = -1  # Track last processed turn
 
         # 🧠 Smart re-thinking - cancel and restart if user adds more before AI speaks
         self.is_thinking: bool = False  # AI is processing (LLM) but not speaking yet
