@@ -877,26 +877,32 @@ class RealtimeVoiceSession:
 
     async def _on_transcript(self, result: TranscriptResult):
         """
-        🎯 VAPI-STYLE: Ultra-simple transcript handling
-        - Always REPLACE pending_transcript (Azure sends cumulative)
-        - Start timer on final transcript
+        🎯 ULTRA-SIMPLE with STRONG DEDUP protection
         """
         try:
             text = result.text.strip()
             if not text:
                 return
 
-            # 🎯 ALWAYS REPLACE - Azure sends cumulative interims
-            self.pending_transcript = text
+            # 🛡️ STRONG DEDUP: Skip if same text processed recently
+            now = time.time()
+            last_time = getattr(self, '_last_transcript_time', 0)
+            if text == self._last_processed and (now - last_time) < 3.0:
+                return  # Skip silently
 
+            # 🎯 Store transcript (REPLACE)
+            self.pending_transcript = text
+            self._last_transcript_time = now
+
+            # Log what we got
+            logger.info(f"📝 STT: '{text}' (final={result.is_final})")
+
+            # Start timer on final
             if result.is_final:
-                logger.info(f"📝 Final: '{text[:50]}...'")
                 self._start_turn_timer()
-            else:
-                logger.debug(f"📝 Interim: '{text[:50]}...'")
 
         except Exception as e:
-            logger.error(f"❌ _on_transcript error: {e}")
+            logger.error(f"❌ _on_transcript: {e}")
 
     def _start_turn_timer(self):
         """🎯 Start/restart the turn timer"""
@@ -952,13 +958,16 @@ class RealtimeVoiceSession:
             transcript = self.pending_transcript
             self.pending_transcript = ""
 
-            # Duplicate check
-            if transcript == self._last_processed:
-                logger.info(f"🔇 Skip duplicate: '{transcript[:30]}...'")
+            # 🛡️ STRONG DEDUP: Skip if same text within 3 seconds
+            now = time.time()
+            last_time = getattr(self, '_last_process_time', 0)
+            if transcript == self._last_processed and (now - last_time) < 3.0:
+                logger.info(f"🔇 Skip duplicate (within 3s): '{transcript[:30]}...'")
                 return
 
             self._last_processed = transcript
-            logger.info(f"✅ Processing: '{transcript[:50]}...'")
+            self._last_process_time = now
+            logger.info(f"✅ PROCESSING: '{transcript}'")
             await self.process_transcript(transcript)
 
         except asyncio.CancelledError:
@@ -986,17 +995,13 @@ class RealtimeVoiceSession:
             logger.error(f"❌ _on_speech_started error: {e}")
 
     async def _on_speech_ended(self):
-        """🎯 User stopped speaking - start timer if we have transcript"""
+        """
+        🎯 NOTE: Azure sends session_stopped, NOT speech_ended!
+        So we DON'T start timer here - we do it in _on_transcript(final=True)
+        """
         try:
             self.user_is_speaking = False
-            logger.info("🔇 Speech ended")
-
-            # Start timer if we have a pending transcript
-            if self.pending_transcript.strip():
-                ai_busy = self.is_speaking or self.is_thinking or self.is_processing
-                if not ai_busy:
-                    self._start_turn_timer()
-
+            logger.info("🔇 Speech ended (session event)")
             await self.client_ws.send_json({"type": "speech_ended"})
         except Exception as e:
             logger.error(f"❌ _on_speech_ended error: {e}")
