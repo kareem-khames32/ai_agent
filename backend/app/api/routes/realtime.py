@@ -996,12 +996,23 @@ class RealtimeVoiceSession:
 
     async def _on_speech_ended(self):
         """
-        🎯 NOTE: Azure sends session_stopped, NOT speech_ended!
-        So we DON'T start timer here - we do it in _on_transcript(final=True)
+        🎯 Speech ended - START TIMER if we have pending transcript!
+        Azure often sends ONLY interim (final=False), so we MUST process on speech end
         """
         try:
             self.user_is_speaking = False
-            logger.info("🔇 Speech ended (session event)")
+
+            # 🎯 KEY FIX: Process interim transcript when speech ends!
+            # Azure doesn't always send final=True
+            if self.pending_transcript.strip():
+                if not (self.is_speaking or self.is_thinking or self.is_processing):
+                    logger.info(f"🔇 Speech ended - processing: '{self.pending_transcript[:40]}...'")
+                    self._start_turn_timer()
+                else:
+                    logger.info("🔇 Speech ended (AI busy)")
+            else:
+                logger.info("🔇 Speech ended (no transcript)")
+
             await self.client_ws.send_json({"type": "speech_ended"})
         except Exception as e:
             logger.error(f"❌ _on_speech_ended error: {e}")
