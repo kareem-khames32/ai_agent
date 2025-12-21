@@ -387,14 +387,15 @@ class SmartTurnDetector:
     """
 
     def __init__(self):
-        # Timeouts (in seconds) - AGGRESSIVE for low latency!
-        self.TIMEOUT_COMPLETE_SENTENCE = 0.25   # جملة كاملة بنقطة → فوري
-        self.TIMEOUT_QUESTION = 0.3             # سؤال كامل
-        self.TIMEOUT_FILLER = 0.2               # كلمة واحدة (أيوه، تمام)
-        self.TIMEOUT_NUMBERS = 0.4              # في أرقام
-        self.TIMEOUT_INCOMPLETE = 0.5           # جملة ناقصة ⬇️ (was 1.5)
-        self.TIMEOUT_SHORT_PHRASE = 0.4         # جملة قصيرة ⬇️ (was 1.0)
-        self.TIMEOUT_DEFAULT = 0.4              # Default ⬇️ (was 0.8)
+        # Timeouts (in seconds) - After 600ms Azure stabilization delay!
+        # Total response time = 600ms (stabilization) + timeout below
+        self.TIMEOUT_COMPLETE_SENTENCE = 0.15   # جملة كاملة بنقطة → فوري (600+150=750ms)
+        self.TIMEOUT_QUESTION = 0.15            # سؤال كامل (600+150=750ms)
+        self.TIMEOUT_FILLER = 0.1               # كلمة واحدة (أيوه، تمام) (600+100=700ms)
+        self.TIMEOUT_NUMBERS = 0.2              # في أرقام (600+200=800ms)
+        self.TIMEOUT_INCOMPLETE = 0.3           # جملة ناقصة (600+300=900ms)
+        self.TIMEOUT_SHORT_PHRASE = 0.2         # جملة قصيرة (600+200=800ms)
+        self.TIMEOUT_DEFAULT = 0.2              # Default (600+200=800ms)
 
         # Speculative execution threshold
         self.SPECULATIVE_WORD_THRESHOLD = 3     # Start LLM after 3 words
@@ -902,16 +903,33 @@ class RealtimeVoiceSession:
             if not new_text:
                 return  # Nothing new
 
-            # 🛡️ DEDUP: Skip if same as last processed
+            # 🛡️ DEDUP 1: Skip if same as last processed
             if new_text == self._last_processed:
+                return
+
+            # 🛡️ DEDUP 2: Skip if new text is just an extension of last processed
+            # (e.g., "السلام عليكم" → "السلام عليكم ورحمة الله")
+            if self._last_processed and new_text.startswith(self._last_processed):
+                logger.info(f"📝 Ignoring extension of already processed: '{new_text[:30]}...'")
+                return
+
+            # 🛡️ DEDUP 3: Skip if last processed is an extension of new text
+            # (e.g., already processed full text, now receiving partial)
+            if self._last_processed and self._last_processed.startswith(new_text):
+                logger.info(f"📝 Ignoring subset of already processed: '{new_text[:30]}...'")
                 return
 
             # Store only the NEW part
             self.pending_transcript = new_text
             logger.info(f"📝 STT: '{new_text}' (final={result.is_final})")
 
-            # Start timer on final
-            if result.is_final:
+            # 🛡️ Don't start timer if already processing - wait for speech_ended
+            if self.is_processing:
+                logger.debug("📝 Transcript received but already processing")
+                return
+
+            # Start timer on final (but main processing is via speech_ended)
+            if result.is_final and not self.is_processing:
                 self._start_turn_timer()
 
         except Exception as e:
@@ -971,12 +989,18 @@ class RealtimeVoiceSession:
             transcript = self.pending_transcript
             self.pending_transcript = ""
 
-            # 🛡️ STRONG DEDUP: Skip if same text within 3 seconds
+            # 🛡️ STRONG DEDUP 1: Skip if same text within 3 seconds
             now = time.time()
             last_time = getattr(self, '_last_process_time', 0)
             if transcript == self._last_processed and (now - last_time) < 3.0:
                 logger.info(f"🔇 Skip duplicate (within 3s): '{transcript[:30]}...'")
                 return
+
+            # 🛡️ STRONG DEDUP 2: Skip if text is extension of already processed
+            if self._last_processed and (now - last_time) < 3.0:
+                if transcript.startswith(self._last_processed) or self._last_processed.startswith(transcript):
+                    logger.info(f"🔇 Skip extension/subset (within 3s): '{transcript[:30]}...'")
+                    return
 
             self._last_processed = transcript
             self._last_process_time = now
@@ -1001,6 +1025,11 @@ class RealtimeVoiceSession:
             # Clear transcript for new turn (only if AI not busy)
             if not (self.is_speaking or self.is_thinking or self.is_processing):
                 self.pending_transcript = ""
+                # 🎯 Clear last processed so user can repeat same phrase in new turn
+                # BUT only if enough time passed since last processing
+                last_time = getattr(self, '_last_process_time', 0)
+                if time.time() - last_time > 3.0:
+                    self._last_processed = ""
                 logger.info("🎤 New turn")
 
             await self.client_ws.send_json({"type": "speech_started"})
@@ -1009,10 +1038,26 @@ class RealtimeVoiceSession:
 
     async def _on_speech_ended(self):
         """
-        🎯 Speech ended - START TIMER and UPDATE BASELINE!
+        🎯 Speech ended - WAIT for Azure to stabilize, then START TIMER!
+
+        CRITICAL FIX: Azure sends partial interim first, then complete transcript.
+        We must wait 600ms for Azure to "catch up" before starting the timer.
+        Otherwise: partial → timer → process → final → timer → process AGAIN!
         """
         try:
             self.user_is_speaking = False
+
+            # Record when speech ended
+            self._speech_ended_time = time.time()
+
+            logger.info(f"🔇 Speech ended - waiting for Azure to stabilize...")
+
+            # 🎯 CRITICAL FIX: Wait for Azure to send complete transcript!
+            # Azure often sends partial interim first, then final 300-600ms later
+            await asyncio.sleep(0.6)  # Wait 600ms for Azure to catch up
+
+            # After waiting, get the LATEST transcript (Azure may have updated it)
+            current_transcript = self.pending_transcript.strip()
 
             # 🎯 KEY: Update baseline with the FULL cumulative text from Azure
             # This prevents next turn from including old text
@@ -1021,9 +1066,9 @@ class RealtimeVoiceSession:
                 logger.debug(f"📌 Baseline updated: '{self._transcript_baseline[:30]}...'")
 
             # Process if we have transcript and AI not busy
-            if self.pending_transcript.strip():
+            if current_transcript:
                 if not (self.is_speaking or self.is_thinking or self.is_processing):
-                    logger.info(f"🔇 Speech ended - processing: '{self.pending_transcript[:40]}...'")
+                    logger.info(f"🔇 Processing after stabilization: '{current_transcript[:40]}...'")
                     self._start_turn_timer()
                 else:
                     logger.info("🔇 Speech ended (AI busy)")
