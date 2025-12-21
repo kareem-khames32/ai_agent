@@ -894,8 +894,20 @@ class RealtimeVoiceSession:
             self._azure_cumulative = raw_text
 
             # 🎯 KEY FIX: Strip previous turns from cumulative transcript
+            # BUT: Don't strip during processing! Late-arriving text should be FULL
+            # so restart logic can process the complete sentence
             baseline = getattr(self, '_transcript_baseline', '')
-            if baseline and raw_text.startswith(baseline):
+
+            if self.is_processing:
+                # During processing: DON'T strip! Keep full text for restart
+                new_text = raw_text
+                # But still strip baseline for comparison if it matches
+                display_text = raw_text
+                if baseline and raw_text.startswith(baseline):
+                    display_text = raw_text[len(baseline):].strip() or raw_text
+                logger.debug(f"📝 Late transcript (full): '{raw_text[:30]}...'")
+            elif baseline and raw_text.startswith(baseline):
+                # Not processing: strip baseline (previous turns)
                 new_text = raw_text[len(baseline):].strip()
             else:
                 new_text = raw_text
@@ -1037,11 +1049,8 @@ class RealtimeVoiceSession:
             # After waiting, get the LATEST transcript (Azure may have updated it)
             current_transcript = self.pending_transcript.strip()
 
-            # 🎯 KEY: Update baseline with the FULL cumulative text from Azure
-            # This prevents next turn from including old text
-            if hasattr(self, '_azure_cumulative') and self._azure_cumulative:
-                self._transcript_baseline = self._azure_cumulative
-                logger.debug(f"📌 Baseline updated: '{self._transcript_baseline[:30]}...'")
+            # 🎯 DON'T set baseline here! Azure may still be transcribing!
+            # Baseline will be set in process_transcript AFTER we capture the text
 
             # Process if we have transcript and AI not busy
             if current_transcript:
@@ -1173,6 +1182,12 @@ class RealtimeVoiceSession:
         try:
             logger.info(f"🎯 Processing: '{transcript[:50]}...'")
             await self.client_ws.send_json({"type": "processing"})
+
+            # 🎯 FIX: Update baseline NOW - when we START processing
+            # This prevents stripping text from the SAME turn that's still coming
+            if hasattr(self, '_azure_cumulative') and self._azure_cumulative:
+                self._transcript_baseline = self._azure_cumulative
+                logger.debug(f"📌 Baseline set: '{self._transcript_baseline[:40]}...'")
 
             # Send user transcript to frontend
             await self.client_ws.send_json({
