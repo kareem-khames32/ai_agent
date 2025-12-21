@@ -894,26 +894,18 @@ class RealtimeVoiceSession:
             self._azure_cumulative = raw_text
 
             # 🎯 KEY FIX: Strip previous turns from cumulative transcript
-            # BUT: Don't strip during processing! Late-arriving text should be FULL
-            # so restart logic can process the complete sentence
             baseline = getattr(self, '_transcript_baseline', '')
 
-            if self.is_processing:
-                # During processing: DON'T strip! Keep full text for restart
-                new_text = raw_text
-                # But still strip baseline for comparison if it matches
-                display_text = raw_text
-                if baseline and raw_text.startswith(baseline):
-                    display_text = raw_text[len(baseline):].strip() or raw_text
-                logger.debug(f"📝 Late transcript (full): '{raw_text[:30]}...'")
-            elif baseline and raw_text.startswith(baseline):
-                # Not processing: strip baseline (previous turns)
+            # Always strip baseline (previous turns)
+            if baseline and raw_text.startswith(baseline):
                 new_text = raw_text[len(baseline):].strip()
+                # Also strip leading punctuation (from previous turn's is_final)
+                new_text = new_text.lstrip('.،؟!؛: ').strip()
             else:
                 new_text = raw_text
 
             if not new_text:
-                return  # Nothing new
+                return  # Nothing new (or just punctuation from previous turn)
 
             # 🛡️ DEDUP: Skip ONLY if EXACT same as last processed
             # DO NOT check for extensions here - it blocks pending_transcript updates!
@@ -1183,11 +1175,8 @@ class RealtimeVoiceSession:
             logger.info(f"🎯 Processing: '{transcript[:50]}...'")
             await self.client_ws.send_json({"type": "processing"})
 
-            # 🎯 FIX: Update baseline NOW - when we START processing
-            # This prevents stripping text from the SAME turn that's still coming
-            if hasattr(self, '_azure_cumulative') and self._azure_cumulative:
-                self._transcript_baseline = self._azure_cumulative
-                logger.debug(f"📌 Baseline set: '{self._transcript_baseline[:40]}...'")
+            # 🎯 NOTE: Baseline is updated at END of processing (in finally block)
+            # This allows late-arriving text from the SAME turn to be captured fully
 
             # Send user transcript to frontend
             await self.client_ws.send_json({
@@ -1220,11 +1209,27 @@ class RealtimeVoiceSession:
             self.is_thinking = False
             logger.info(f"⏱️ Turn: {int((time.time() - process_start) * 1000)}ms")
 
+            # 🎯 FIX: Update baseline at END of processing
+            # This includes the full turn text, so next turn won't include previous text
+            if hasattr(self, '_azure_cumulative') and self._azure_cumulative:
+                self._transcript_baseline = self._azure_cumulative
+                logger.debug(f"📌 Baseline updated: '{self._transcript_baseline[:40]}...'")
+
             # 🎯 FIX: Check if new transcript arrived during processing
-            # This handles late is_final from Azure that arrived while we were busy
-            if self.pending_transcript and self.pending_transcript != self._last_processed:
-                logger.info(f"📝 New transcript during processing: '{self.pending_transcript[:30]}...'")
-                self._start_turn_timer()
+            # Normalize comparison to ignore punctuation-only changes from Azure
+            if self.pending_transcript:
+                # Remove trailing punctuation for comparison
+                pending_norm = self.pending_transcript.rstrip('.،؟!؛:')
+                last_norm = (self._last_processed or '').rstrip('.،؟!؛:')
+
+                if pending_norm != last_norm and len(pending_norm) > len(last_norm):
+                    # Actually NEW content (not just punctuation change)
+                    logger.info(f"📝 New transcript during processing: '{self.pending_transcript[:30]}...'")
+                    self._start_turn_timer()
+                else:
+                    # Just punctuation change - update last_processed but don't re-process
+                    if self.pending_transcript != self._last_processed:
+                        logger.debug(f"📝 Punctuation update only, skipping re-process")
 
     async def process_audio(self):
         """Process accumulated audio buffer (FALLBACK - batch STT) with restart support"""
