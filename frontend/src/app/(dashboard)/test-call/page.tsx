@@ -126,25 +126,26 @@ export default function TestCallPage() {
     setStatus("connecting");
 
     try {
-      const ws = new WebSocket(`ws://localhost:8000/api/realtime/realtime/${callId}`);
+      // Use the new voice WebSocket endpoint
+      const ws = new WebSocket(`ws://localhost:8000/api/voice/ws`);
       wsRef.current = ws;
 
       ws.onopen = () => {
         console.log("WebSocket connected");
+        // Send config with new format
         ws.send(JSON.stringify({
           type: "config",
-          data: {
-            stt_provider: sttProvider,
-            stt_api_key: sttApiKey,
-            stt_region: sttRegion,
-            language: "ar",
-            llm_provider: llmProvider,
-            llm_api_key: llmApiKey,
-            tts_provider: ttsProvider,
-            tts_api_key: ttsApiKey,
-            tts_region: ttsRegion,
-            system_prompt: systemPrompt,
+          system_prompt: systemPrompt,
+          assistant: {
+            id: callId,
+            model_provider: llmProvider,
+            model_name: llmProvider === "openai" ? "gpt-4o-mini" : "claude-3-5-sonnet-20241022",
+            voice_provider: ttsProvider,
+            voice_id: ttsProvider === "elevenlabs" ? "21m00Tcm4TlvDq8ikWAM" : "alloy",
+            transcriber_provider: sttProvider,
+            transcriber_language: "ar",
           },
+          credentials: creds,
         }));
       };
 
@@ -155,30 +156,49 @@ export default function TestCallPage() {
         switch (message.type) {
           case "ready":
             setStatus("connected");
+            // Start continuous audio streaming
+            startRecording();
             addToast({
               type: "success",
               title: "متصل!",
-              description: "جاهز - اضغط على المايك وتكلم",
+              description: `معرف المكالمة: ${message.call_id}`,
             });
             break;
 
           case "transcript":
+            // New format: is_final instead of role
+            if (message.is_final) {
+              setTranscript(prev => [...prev, {
+                role: "user",
+                text: message.text,
+                timestamp: new Date(),
+              }]);
+            }
+            setIsProcessing(false);
+            break;
+
+          case "response":
+            // AI response text
             setTranscript(prev => [...prev, {
-              role: message.role,
+              role: "assistant",
               text: message.text,
               timestamp: new Date(),
             }]);
-            setIsProcessing(false);
+            break;
+
+          case "state":
+            // Handle state changes (listening, processing, speaking)
+            if (message.state === "processing") {
+              setIsProcessing(true);
+            } else {
+              setIsProcessing(false);
+            }
             break;
 
           case "audio":
             setIsProcessing(false);
             if (!isSpeakerMuted) {
               playAudioBase64(message.data);
-            }
-            // Auto-start listening after response
-            if (listeningRef.current) {
-              setTimeout(() => startRecording(), 500);
             }
             break;
 
@@ -220,7 +240,7 @@ export default function TestCallPage() {
     listeningRef.current = false;
     stopRecording();
     if (wsRef.current) {
-      wsRef.current.send(JSON.stringify({ type: "end" }));
+      wsRef.current.send(JSON.stringify({ type: "stop" }));
       wsRef.current.close();
       wsRef.current = null;
     }
