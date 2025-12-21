@@ -180,8 +180,9 @@ export default function LiveCallPage() {
   const mediaStreamRef = React.useRef<MediaStream | null>(null);
   const processorRef = React.useRef<ScriptProcessorNode | null>(null);
   const transcriptEndRef = React.useRef<HTMLDivElement>(null);
-  const audioQueueRef = React.useRef<ArrayBuffer[]>([]);
+  const audioQueueRef = React.useRef<Float32Array[]>([]);
   const isPlayingRef = React.useRef(false);
+  const nextPlayTimeRef = React.useRef(0);
 
   // Set mounted on client
   React.useEffect(() => {
@@ -205,8 +206,9 @@ export default function LiveCallPage() {
     setStatus("connecting");
 
     try {
-      // Initialize audio context
+      // Initialize audio context and reset play time
       audioContextRef.current = new AudioContext({ sampleRate: 24000 });
+      nextPlayTimeRef.current = 0;
 
       // Get microphone access
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -433,7 +435,7 @@ export default function LiveCallPage() {
     }
   };
 
-  // Play received audio
+  // Play received audio with proper queuing
   const playAudio = async (base64Audio: string) => {
     if (!audioContextRef.current) return;
 
@@ -460,11 +462,19 @@ export default function LiveCallPage() {
       );
       audioBuffer.getChannelData(0).set(floatData);
 
-      // Play
+      // Schedule audio to play in sequence (not overlapping)
+      const currentTime = audioContextRef.current.currentTime;
+      const startTime = Math.max(currentTime, nextPlayTimeRef.current);
+
+      // Create and play source
       const source = audioContextRef.current.createBufferSource();
       source.buffer = audioBuffer;
       source.connect(audioContextRef.current.destination);
-      source.start();
+      source.start(startTime);
+
+      // Update next play time (add buffer duration)
+      nextPlayTimeRef.current = startTime + audioBuffer.duration;
+
     } catch (error) {
       console.error("Error playing audio:", error);
     }
@@ -482,6 +492,8 @@ export default function LiveCallPage() {
     setStatus("disconnected");
     setAgentState("idle");
     setCallId(null);
+    nextPlayTimeRef.current = 0;
+    audioQueueRef.current = [];
   };
 
   // Toggle mic mute

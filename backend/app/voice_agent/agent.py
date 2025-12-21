@@ -71,6 +71,8 @@ class VoiceAgent:
         self._is_running = False
         self._turn_check_task: Optional[asyncio.Task] = None
         self._response_task: Optional[asyncio.Task] = None
+        self._llm_generating = False  # Track if LLM is still generating
+        self._pending_tts_count = 0   # Track pending TTS sentences
 
         # Wire up callbacks
         self._setup_callbacks()
@@ -184,10 +186,12 @@ class VoiceAgent:
 
         # Cancel LLM generation
         self.llm.cancel()
+        self._llm_generating = False
 
         # Cancel TTS
         self.tts.cancel()
         self.tts.clear_queue()
+        self._pending_tts_count = 0
 
         # Reset state
         await self._set_state(AgentState.LISTENING)
@@ -259,6 +263,9 @@ class VoiceAgent:
 
     async def _generate_response(self, user_text: str):
         """Generate and speak response"""
+        self._llm_generating = True
+        self._pending_tts_count = 0
+
         try:
             first_sentence = True
 
@@ -271,6 +278,10 @@ class VoiceAgent:
             logger.debug("Response generation cancelled")
         except Exception as e:
             logger.error(f"Response generation error: {e}")
+        finally:
+            self._llm_generating = False
+            # Check if we should go back to listening
+            await self._check_speaking_complete()
 
     # LLM Callbacks
     async def _on_llm_sentence(self, sentence: str):
@@ -280,8 +291,15 @@ class VoiceAgent:
             await self._set_state(AgentState.SPEAKING)
             self.latency.mark("tts_start")
 
+        # Track pending TTS
+        self._pending_tts_count += 1
+
         # Speak the sentence
         await self.tts.speak(sentence)
+
+        # Decrement after speaking completes
+        self._pending_tts_count -= 1
+        await self._check_speaking_complete()
 
     async def _on_llm_complete(self, response: str):
         """LLM finished generating"""
@@ -301,9 +319,15 @@ class VoiceAgent:
         self.latency.mark("first_audio_byte")
 
     async def _on_tts_speech_end(self):
-        """TTS finished speaking"""
-        if self.state == AgentState.SPEAKING:
-            await self._set_state(AgentState.LISTENING)
+        """TTS finished speaking a sentence"""
+        # We track speaking completion via _check_speaking_complete
+        pass
+
+    async def _check_speaking_complete(self):
+        """Check if all speaking is complete and we can go back to listening"""
+        if not self._llm_generating and self._pending_tts_count <= 0:
+            if self.state == AgentState.SPEAKING:
+                await self._set_state(AgentState.LISTENING)
 
     # Turn check loop
     async def _turn_check_loop(self):
