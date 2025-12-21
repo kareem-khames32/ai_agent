@@ -1205,6 +1205,12 @@ class RealtimeVoiceSession:
             self.is_thinking = False
             logger.info(f"⏱️ Turn: {int((time.time() - process_start) * 1000)}ms")
 
+            # 🎯 FIX: Check if new transcript arrived during processing
+            # This handles late is_final from Azure that arrived while we were busy
+            if self.pending_transcript and self.pending_transcript != self._last_processed:
+                logger.info(f"📝 New transcript during processing: '{self.pending_transcript[:30]}...'")
+                self._start_turn_timer()
+
     async def process_audio(self):
         """Process accumulated audio buffer (FALLBACK - batch STT) with restart support"""
         if self.is_processing or len(self.audio_buffer) < self.min_audio_length:
