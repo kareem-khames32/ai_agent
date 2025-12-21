@@ -11,7 +11,7 @@ from enum import Enum
 from .config import VoiceAgentConfig, get_config
 from .pipeline import (
     VADProcessor, VADState, VADEvent,
-    DeepgramSTT, TranscriptEvent,
+    STTStreamer, TranscriptEvent,
     TurnDetector, TurnState,
     LLMStreamer,
     TTSStreamer
@@ -54,9 +54,9 @@ class VoiceAgent:
         # Latency tracking
         self.latency = LatencyTracker(self.call_id)
 
-        # Pipeline components
-        self.vad = VADProcessor(self.config)
-        self.stt = DeepgramSTT(self.config)
+        # Pipeline components (VAD is optional - needs numpy)
+        self.vad = VADProcessor(self.config) if VADProcessor else None
+        self.stt = STTStreamer(self.config)  # Multi-provider STT
         self.turn_detector = TurnDetector(self.config)
         self.llm = LLMStreamer(self.config)
         self.tts = TTSStreamer(self.config)
@@ -80,9 +80,10 @@ class VoiceAgent:
     def _setup_callbacks(self):
         """Wire up internal callbacks between components"""
 
-        # VAD callbacks
-        self.vad.on_speech_start = self._on_vad_speech_start
-        self.vad.on_speech_end = self._on_vad_speech_end
+        # VAD callbacks (optional - needs numpy)
+        if self.vad:
+            self.vad.on_speech_start = self._on_vad_speech_start
+            self.vad.on_speech_end = self._on_vad_speech_end
 
         # STT callbacks
         self.stt.on_transcript = self._on_stt_transcript
@@ -159,8 +160,8 @@ class VoiceAgent:
         if not self._is_running:
             return
 
-        # Handle barge-in
-        if self.state == AgentState.SPEAKING:
+        # Handle barge-in (only if VAD available)
+        if self.state == AgentState.SPEAKING and self.vad and VADState:
             # Check VAD for user speech during AI response
             vad_event = self.vad.process(audio_chunk)
             if vad_event and vad_event.state == VADState.SPEECH_START:
@@ -169,10 +170,11 @@ class VoiceAgent:
 
         # Normal processing
         if self.state in (AgentState.LISTENING, AgentState.IDLE):
-            # Process through VAD
-            vad_event = self.vad.process(audio_chunk)
+            # Process through VAD if available
+            if self.vad:
+                self.vad.process(audio_chunk)
 
-            # Send to STT regardless (it needs continuous audio)
+            # Send to STT (it needs continuous audio)
             await self.stt.send_audio(audio_chunk)
 
     async def _handle_bargein(self):
