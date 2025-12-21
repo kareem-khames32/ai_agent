@@ -2,8 +2,9 @@
 Voice Agent Configuration
 """
 import os
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Optional, Dict, Any
+
 
 @dataclass
 class VoiceAgentConfig:
@@ -26,25 +27,30 @@ class VoiceAgentConfig:
     turn_max_wait_ms: int = 2000        # Max wait before forcing turn
     punctuation_reduces_silence: bool = True
 
-    # STT Settings (Deepgram)
+    # STT Settings
     stt_provider: str = "deepgram"
+    stt_api_key: Optional[str] = None   # Will use env if None
     stt_language: str = "ar"            # Arabic
     stt_model: str = "nova-2"
     stt_interim_results: bool = True
     stt_punctuate: bool = True
     stt_endpointing_ms: int = 500
+    stt_region: Optional[str] = None    # For Azure
 
     # LLM Settings
     llm_provider: str = "openai"
+    llm_api_key: Optional[str] = None   # Will use env if None
     llm_model: str = "gpt-4o-mini"
     llm_temperature: float = 0.7
     llm_max_tokens: int = 200
     llm_context_turns: int = 10         # Keep last N turns
 
     # TTS Settings
-    tts_provider: str = "openai"        # openai, elevenlabs, cartesia
+    tts_provider: str = "openai"        # openai, elevenlabs, cartesia, azure
+    tts_api_key: Optional[str] = None   # Will use env if None
     tts_voice: str = "alloy"
     tts_speed: float = 1.0
+    tts_region: Optional[str] = None    # For Azure
 
     # Latency Targets (ms)
     target_e2e_latency: int = 800
@@ -81,5 +87,120 @@ def get_config() -> VoiceAgentConfig:
         config.tts_provider = os.getenv("TTS_PROVIDER")
     if os.getenv("TTS_VOICE"):
         config.tts_voice = os.getenv("TTS_VOICE")
+
+    return config
+
+
+def create_config_from_assistant(
+    assistant: Dict[str, Any],
+    credentials: Dict[str, Dict[str, str]]
+) -> VoiceAgentConfig:
+    """
+    Create VoiceAgentConfig from assistant settings and credentials
+
+    Args:
+        assistant: Assistant configuration dict with:
+            - model_provider: openai, anthropic, google, groq, etc.
+            - model_name: gpt-4o-mini, claude-sonnet, etc.
+            - voice_provider: elevenlabs, azure, openai, etc.
+            - voice_id: Voice ID for TTS
+            - transcriber_provider: deepgram, azure, openai, etc.
+            - transcriber_language: ar, ar-SA, en, etc.
+            - temperature, max_tokens, etc.
+
+        credentials: Dict of provider credentials:
+            {
+                "openai": {"api_key": "sk-..."},
+                "deepgram": {"api_key": "..."},
+                "elevenlabs": {"api_key": "..."},
+                "azure_speech": {"api_key": "...", "region": "eastus"},
+                ...
+            }
+
+    Returns:
+        VoiceAgentConfig with all settings
+    """
+    config = VoiceAgentConfig()
+
+    # === STT Configuration ===
+    stt_provider = assistant.get("transcriber_provider", "deepgram").lower()
+    config.stt_provider = stt_provider
+    config.stt_language = assistant.get("transcriber_language", "ar")
+
+    # Get STT credentials
+    if stt_provider == "deepgram":
+        creds = credentials.get("deepgram", {})
+        config.stt_api_key = creds.get("api_key")
+        config.stt_model = "nova-2"
+    elif stt_provider == "azure":
+        creds = credentials.get("azure_speech", {})
+        config.stt_api_key = creds.get("api_key")
+        config.stt_region = creds.get("region", "eastus")
+    elif stt_provider == "openai":
+        creds = credentials.get("openai_whisper", {}) or credentials.get("openai", {})
+        config.stt_api_key = creds.get("api_key")
+    elif stt_provider == "groq":
+        creds = credentials.get("groq_whisper", {}) or credentials.get("groq", {})
+        config.stt_api_key = creds.get("api_key")
+
+    # === LLM Configuration ===
+    llm_provider = assistant.get("model_provider", "openai").lower()
+    config.llm_provider = llm_provider
+    config.llm_model = assistant.get("model_name", "gpt-4o-mini")
+    config.llm_temperature = assistant.get("temperature", 0.7)
+    config.llm_max_tokens = assistant.get("max_tokens", 200)
+
+    # Get LLM credentials
+    if llm_provider in ["openai"]:
+        creds = credentials.get("openai", {})
+        config.llm_api_key = creds.get("api_key")
+    elif llm_provider == "anthropic":
+        creds = credentials.get("anthropic", {})
+        config.llm_api_key = creds.get("api_key")
+    elif llm_provider == "google":
+        creds = credentials.get("google", {})
+        config.llm_api_key = creds.get("api_key")
+    elif llm_provider == "groq":
+        creds = credentials.get("groq", {})
+        config.llm_api_key = creds.get("api_key")
+    elif llm_provider == "together":
+        creds = credentials.get("together", {})
+        config.llm_api_key = creds.get("api_key")
+
+    # === TTS Configuration ===
+    tts_provider = assistant.get("voice_provider", "openai").lower()
+    config.tts_provider = tts_provider
+    config.tts_voice = assistant.get("voice_id", "alloy")
+
+    # Get TTS credentials
+    if tts_provider == "openai":
+        creds = credentials.get("openai_tts", {}) or credentials.get("openai", {})
+        config.tts_api_key = creds.get("api_key")
+    elif tts_provider == "elevenlabs":
+        creds = credentials.get("elevenlabs", {})
+        config.tts_api_key = creds.get("api_key")
+    elif tts_provider == "azure":
+        creds = credentials.get("azure_tts", {})
+        config.tts_api_key = creds.get("api_key")
+        config.tts_region = creds.get("region", "eastus")
+    elif tts_provider == "cartesia":
+        creds = credentials.get("cartesia", {})
+        config.tts_api_key = creds.get("api_key")
+    elif tts_provider == "deepgram":
+        creds = credentials.get("deepgram_tts", {}) or credentials.get("deepgram", {})
+        config.tts_api_key = creds.get("api_key")
+    elif tts_provider == "google":
+        creds = credentials.get("google_tts", {}) or credentials.get("google", {})
+        config.tts_api_key = creds.get("api_key")
+
+    # Voice settings
+    voice_settings = assistant.get("voice_settings", {})
+    if voice_settings.get("speed"):
+        config.tts_speed = voice_settings["speed"]
+
+    # Transcriber settings
+    transcriber_settings = assistant.get("transcriber_settings", {})
+    if transcriber_settings.get("endpointing_ms"):
+        config.stt_endpointing_ms = transcriber_settings["endpointing_ms"]
 
     return config

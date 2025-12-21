@@ -65,9 +65,10 @@ class DeepgramSTT:
     async def connect(self) -> bool:
         """Connect to Deepgram streaming API"""
         try:
-            api_key = os.getenv("DEEPGRAM_API_KEY")
+            # Use config API key first, then fall back to environment
+            api_key = self.config.stt_api_key or os.getenv("DEEPGRAM_API_KEY")
             if not api_key:
-                logger.error("DEEPGRAM_API_KEY not set")
+                logger.error("DEEPGRAM_API_KEY not set (config or env)")
                 return False
 
             self.client = DeepgramClient(api_key)

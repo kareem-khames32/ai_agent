@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.websockets import WebSocketState
 from loguru import logger
 
-from app.voice_agent import VoiceAgent, VoiceAgentConfig, get_config, AgentState
+from app.voice_agent import VoiceAgent, VoiceAgentConfig, get_config, create_config_from_assistant, AgentState
 
 
 # Create minimal FastAPI app
@@ -62,7 +62,7 @@ async def voice_websocket(
     active_connections[call_id] = websocket
     logger.info(f"🔌 Voice WebSocket connected: {call_id}")
 
-    config = get_config()
+    config: Optional[VoiceAgentConfig] = None
     agent: Optional[VoiceAgent] = None
     is_connected = True
 
@@ -100,15 +100,6 @@ async def voice_websocket(
             logger.error(f"Send state error: {e}")
 
     try:
-        # Create agent
-        agent = VoiceAgent(config, call_id)
-
-        # Set up callbacks
-        agent.on_audio_output = send_audio
-        agent.on_transcript = send_transcript
-        agent.on_response = send_response
-        agent.on_state_change = send_state
-
         # Wait for config message
         config_received = False
         system_prompt = "أنت مساعد صوتي ذكي. تتحدث العربية بطلاقة. كن مختصراً ومفيداً."
@@ -119,14 +110,34 @@ async def voice_websocket(
 
                 if data.get("type") == "config":
                     system_prompt = data.get("system_prompt", system_prompt)
-                    assistant_id = data.get("assistant_id")
-                    logger.info(f"📋 Config received (assistant_id={assistant_id})")
+                    assistant_data = data.get("assistant")
+                    credentials = data.get("credentials", {})
+
+                    # Create config from assistant if provided
+                    if assistant_data:
+                        config = create_config_from_assistant(assistant_data, credentials)
+                        logger.info(f"📋 Config from assistant: LLM={config.llm_provider}/{config.llm_model}, TTS={config.tts_provider}, STT={config.stt_provider}")
+                    else:
+                        config = get_config()
+                        logger.info(f"📋 Using default config")
+
                     config_received = True
                 elif data.get("type") == "audio":
+                    config = get_config()
                     config_received = True
             except asyncio.TimeoutError:
                 logger.warning("Config timeout, using defaults")
+                config = get_config()
                 config_received = True
+
+        # Create agent with config
+        agent = VoiceAgent(config, call_id)
+
+        # Set up callbacks
+        agent.on_audio_output = send_audio
+        agent.on_transcript = send_transcript
+        agent.on_response = send_response
+        agent.on_state_change = send_state
 
         # Start agent
         await agent.start(system_prompt)

@@ -7,6 +7,13 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Mic,
   MicOff,
   Phone,
@@ -18,6 +25,8 @@ import {
   AlertCircle,
   CheckCircle,
   Radio,
+  Bot,
+  Settings,
 } from "lucide-react";
 
 interface TranscriptEntry {
@@ -27,6 +36,20 @@ interface TranscriptEntry {
   isFinal?: boolean;
 }
 
+interface Assistant {
+  id: string;
+  name: string;
+  system_prompt: string;
+  model_provider: string;
+  model_name: string;
+  voice_provider: string;
+  voice_id: string;
+  transcriber_provider: string;
+  transcriber_language: string;
+  temperature?: number;
+  max_tokens?: number;
+}
+
 type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
 type AgentState = "idle" | "listening" | "processing" | "speaking";
 
@@ -34,6 +57,49 @@ const DEFAULT_PROMPT = `أنت مساعد صوتي ذكي.
 تتحدث باللغة العربية.
 كن مهذباً ومحترفاً.
 ردودك يجب أن تكون مختصرة ومباشرة (جملة أو جملتين فقط).`;
+
+// Default assistants for testing (in real app, fetch from API)
+const DEFAULT_ASSISTANTS: Assistant[] = [
+  {
+    id: "default",
+    name: "المساعد الافتراضي",
+    system_prompt: DEFAULT_PROMPT,
+    model_provider: "openai",
+    model_name: "gpt-4o-mini",
+    voice_provider: "openai",
+    voice_id: "alloy",
+    transcriber_provider: "deepgram",
+    transcriber_language: "ar",
+  },
+  {
+    id: "customer-service",
+    name: "خدمة العملاء",
+    system_prompt: `أنت موظف خدمة عملاء محترف.
+تتحدث العربية بطلاقة.
+ساعد العميل بحل مشاكله بأدب واحترافية.
+ردودك مختصرة ومباشرة.`,
+    model_provider: "openai",
+    model_name: "gpt-4o-mini",
+    voice_provider: "elevenlabs",
+    voice_id: "21m00Tcm4TlvDq8ikWAM",
+    transcriber_provider: "deepgram",
+    transcriber_language: "ar",
+  },
+  {
+    id: "sales-agent",
+    name: "وكيل المبيعات",
+    system_prompt: `أنت وكيل مبيعات ذكي.
+تتحدث العربية بطلاقة.
+ساعد العميل في اختيار المنتجات المناسبة.
+كن ودوداً ومقنعاً.`,
+    model_provider: "anthropic",
+    model_name: "claude-3-5-sonnet-20241022",
+    voice_provider: "azure",
+    voice_id: "ar-SA-HamedNeural",
+    transcriber_provider: "azure",
+    transcriber_language: "ar-SA",
+  },
+];
 
 export default function LiveCallPage() {
   const { addToast } = useToast();
@@ -48,8 +114,20 @@ export default function LiveCallPage() {
   const [isSpeakerMuted, setIsSpeakerMuted] = React.useState(false);
   const [callId, setCallId] = React.useState<string | null>(null);
 
-  // Prompt
+  // Assistant selection
+  const [assistants, setAssistants] = React.useState<Assistant[]>(DEFAULT_ASSISTANTS);
+  const [selectedAssistantId, setSelectedAssistantId] = React.useState<string>("default");
+  const selectedAssistant = assistants.find(a => a.id === selectedAssistantId) || assistants[0];
+
+  // Prompt (from selected assistant)
   const [systemPrompt, setSystemPrompt] = React.useState(DEFAULT_PROMPT);
+
+  // Update prompt when assistant changes
+  React.useEffect(() => {
+    if (selectedAssistant) {
+      setSystemPrompt(selectedAssistant.system_prompt);
+    }
+  }, [selectedAssistant]);
 
   // Transcript
   const [transcript, setTranscript] = React.useState<TranscriptEntry[]>([]);
@@ -108,11 +186,35 @@ export default function LiveCallPage() {
 
       ws.onopen = () => {
         console.log("WebSocket connected");
-        // Send config
+
+        // Get credentials from localStorage
+        let credentials: Record<string, Record<string, string>> = {};
+        try {
+          const saved = localStorage.getItem("provider_credentials");
+          if (saved) {
+            credentials = JSON.parse(saved);
+          }
+        } catch (e) {
+          console.error("Failed to load credentials:", e);
+        }
+
+        // Send config with assistant settings and credentials
         ws.send(
           JSON.stringify({
             type: "config",
             system_prompt: systemPrompt,
+            assistant: {
+              id: selectedAssistant.id,
+              model_provider: selectedAssistant.model_provider,
+              model_name: selectedAssistant.model_name,
+              voice_provider: selectedAssistant.voice_provider,
+              voice_id: selectedAssistant.voice_id,
+              transcriber_provider: selectedAssistant.transcriber_provider,
+              transcriber_language: selectedAssistant.transcriber_language,
+              temperature: selectedAssistant.temperature || 0.7,
+              max_tokens: selectedAssistant.max_tokens || 200,
+            },
+            credentials: credentials,
           })
         );
       };
@@ -457,6 +559,51 @@ export default function LiveCallPage() {
             <CardTitle>إعدادات المكالمة</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* Assistant Selector */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium flex items-center gap-2">
+                <Bot className="h-4 w-4" />
+                اختر المساعد
+              </label>
+              <Select
+                value={selectedAssistantId}
+                onValueChange={setSelectedAssistantId}
+                disabled={status === "connected"}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="اختر مساعد..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {assistants.map((assistant) => (
+                    <SelectItem key={assistant.id} value={assistant.id}>
+                      <div className="flex items-center gap-2">
+                        <span>{assistant.name}</span>
+                        <span className="text-xs text-[var(--muted-foreground)]">
+                          ({assistant.model_provider})
+                        </span>
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {selectedAssistant && (
+                <div className="flex flex-wrap gap-1 mt-2">
+                  <Badge variant="outline" className="text-xs">
+                    <Settings className="h-3 w-3 mr-1" />
+                    {selectedAssistant.model_provider}: {selectedAssistant.model_name}
+                  </Badge>
+                  <Badge variant="outline" className="text-xs">
+                    <Volume2 className="h-3 w-3 mr-1" />
+                    {selectedAssistant.voice_provider}
+                  </Badge>
+                  <Badge variant="outline" className="text-xs">
+                    <Mic className="h-3 w-3 mr-1" />
+                    {selectedAssistant.transcriber_provider}
+                  </Badge>
+                </div>
+              )}
+            </div>
+
             {/* System Prompt */}
             <div className="space-y-2">
               <label className="text-sm font-medium">System Prompt</label>
