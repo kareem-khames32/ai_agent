@@ -2,11 +2,13 @@
 Voices routes
 """
 from typing import List, Optional
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
 from uuid import UUID
+import httpx
 
 from app.core.database import get_db
 from app.models.voice import Voice
@@ -125,3 +127,131 @@ async def sync_voices(
     """Sync voices from a provider"""
     # TODO: Implement actual voice syncing from providers
     return {"count": 0, "message": f"Synced voices from {provider}"}
+
+
+class VoicePreviewRequest(BaseModel):
+    text: str
+    provider: str
+    voice_id: str
+    api_key: str
+    region: Optional[str] = None
+
+
+@router.post("/preview")
+async def preview_voice(request: VoicePreviewRequest):
+    """
+    Preview a voice by synthesizing text to speech
+    Returns audio/mpeg for playback
+    """
+    provider = request.provider.lower()
+
+    try:
+        if provider == "openai":
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    "https://api.openai.com/v1/audio/speech",
+                    headers={
+                        "Authorization": f"Bearer {request.api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": "tts-1",
+                        "input": request.text,
+                        "voice": request.voice_id or "alloy",
+                        "response_format": "mp3"
+                    },
+                    timeout=30.0
+                )
+                if response.status_code == 200:
+                    return Response(content=response.content, media_type="audio/mpeg")
+                else:
+                    raise HTTPException(status_code=response.status_code, detail=response.text)
+
+        elif provider == "elevenlabs":
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"https://api.elevenlabs.io/v1/text-to-speech/{request.voice_id}",
+                    headers={
+                        "xi-api-key": request.api_key,
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "text": request.text,
+                        "model_id": "eleven_multilingual_v2",
+                        "voice_settings": {
+                            "stability": 0.5,
+                            "similarity_boost": 0.75
+                        }
+                    },
+                    timeout=30.0
+                )
+                if response.status_code == 200:
+                    return Response(content=response.content, media_type="audio/mpeg")
+                else:
+                    raise HTTPException(status_code=response.status_code, detail=response.text)
+
+        elif provider == "azure":
+            if not request.region:
+                raise HTTPException(status_code=400, detail="Azure TTS requires region")
+
+            # Get access token
+            async with httpx.AsyncClient() as client:
+                token_response = await client.post(
+                    f"https://{request.region}.api.cognitive.microsoft.com/sts/v1.0/issueToken",
+                    headers={"Ocp-Apim-Subscription-Key": request.api_key},
+                    timeout=10.0
+                )
+                if token_response.status_code != 200:
+                    raise HTTPException(status_code=401, detail="Failed to get Azure token")
+
+                access_token = token_response.text
+
+                # Synthesize speech
+                ssml = f"""
+                <speak version='1.0' xml:lang='ar-SA'>
+                    <voice name='{request.voice_id}'>{request.text}</voice>
+                </speak>
+                """
+
+                tts_response = await client.post(
+                    f"https://{request.region}.tts.speech.microsoft.com/cognitiveservices/v1",
+                    headers={
+                        "Authorization": f"Bearer {access_token}",
+                        "Content-Type": "application/ssml+xml",
+                        "X-Microsoft-OutputFormat": "audio-16khz-128kbitrate-mono-mp3"
+                    },
+                    content=ssml,
+                    timeout=30.0
+                )
+
+                if tts_response.status_code == 200:
+                    return Response(content=tts_response.content, media_type="audio/mpeg")
+                else:
+                    raise HTTPException(status_code=tts_response.status_code, detail="Azure TTS failed")
+
+        elif provider == "deepgram":
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    "https://api.deepgram.com/v1/speak",
+                    headers={
+                        "Authorization": f"Token {request.api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    params={"model": request.voice_id or "aura-asteria-en"},
+                    json={"text": request.text},
+                    timeout=30.0
+                )
+                if response.status_code == 200:
+                    return Response(content=response.content, media_type="audio/mpeg")
+                else:
+                    raise HTTPException(status_code=response.status_code, detail=response.text)
+
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported provider: {provider}")
+
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="TTS request timed out")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

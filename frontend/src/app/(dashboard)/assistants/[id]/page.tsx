@@ -385,7 +385,7 @@ export default function AssistantEditorPage() {
         : "Hello, how can I help you today?";
 
       // Call backend TTS preview endpoint
-      const response = await fetch("http://localhost:8000/api/realtime/preview-voice", {
+      const response = await fetch("http://localhost:8000/api/voices/preview", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
