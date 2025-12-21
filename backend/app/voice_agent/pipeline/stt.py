@@ -193,10 +193,23 @@ class OpenAIWhisperSTT(STTProvider):
         self._processing = False
 
     async def connect(self) -> bool:
-        self.api_key = self.config.stt_api_key or os.getenv("OPENAI_API_KEY")
+        # Try multiple sources for OpenAI API key:
+        # 1. If stt_provider is "openai", use stt_api_key
+        # 2. If llm_provider is "openai", use llm_api_key
+        # 3. Fall back to environment variable
+        if self.config.stt_provider == "openai":
+            self.api_key = self.config.stt_api_key
+
+        if not self.api_key and self.config.llm_provider == "openai":
+            self.api_key = self.config.llm_api_key
+
         if not self.api_key:
-            logger.error("OpenAI API key not configured for Whisper STT")
+            self.api_key = os.getenv("OPENAI_API_KEY")
+
+        if not self.api_key:
+            logger.error("OpenAI API key not found for Whisper STT")
             return False
+
         self.is_connected = True
         logger.info("✅ OpenAI Whisper STT ready")
         return True
@@ -274,6 +287,111 @@ class OpenAIWhisperSTT(STTProvider):
             await self._process_buffer()
         self.is_connected = False
         self.audio_buffer = b""
+
+    @property
+    def last_final_text(self) -> str:
+        return self._last_final_text
+
+
+class AzureWhisperSTT(STTProvider):
+    """Azure Speech-to-Text (batch mode)"""
+
+    def __init__(self, config: VoiceAgentConfig):
+        super().__init__(config)
+        self.api_key = None
+        self.region = None
+        self.audio_buffer = b""
+        self.buffer_duration_ms = 0
+        self.min_buffer_ms = 1000
+        self._last_final_text = ""
+        self._processing = False
+
+    async def connect(self) -> bool:
+        self.api_key = self.config.stt_api_key or os.getenv("AZURE_SPEECH_KEY")
+        self.region = self.config.stt_region or os.getenv("AZURE_SPEECH_REGION", "eastus")
+
+        if not self.api_key:
+            logger.error("Azure Speech API key not configured")
+            return False
+
+        self.is_connected = True
+        logger.info(f"✅ Azure STT ready (region={self.region})")
+        return True
+
+    async def send_audio(self, audio_chunk: bytes):
+        if not self.is_connected:
+            return
+
+        self.audio_buffer += audio_chunk
+        self.buffer_duration_ms = len(self.audio_buffer) / 32
+
+        if self.buffer_duration_ms >= self.min_buffer_ms and not self._processing:
+            asyncio.create_task(self._process_buffer())
+
+    async def _process_buffer(self):
+        if self._processing or len(self.audio_buffer) < 1000:
+            return
+
+        self._processing = True
+        audio_data = self.audio_buffer
+        self.audio_buffer = b""
+
+        try:
+            import io
+            import wave
+
+            wav_buffer = io.BytesIO()
+            with wave.open(wav_buffer, 'wb') as wav:
+                wav.setnchannels(1)
+                wav.setsampwidth(2)
+                wav.setframerate(16000)
+                wav.writeframes(audio_data)
+            wav_buffer.seek(0)
+
+            # Get language code for Azure
+            lang = self.config.stt_language or "ar-SA"
+            if len(lang) == 2:
+                lang = f"{lang}-SA" if lang == "ar" else f"{lang}-US"
+
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"https://{self.region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1",
+                    headers={
+                        "Ocp-Apim-Subscription-Key": self.api_key,
+                        "Content-Type": "audio/wav; codecs=audio/pcm; samplerate=16000"
+                    },
+                    params={"language": lang},
+                    content=wav_buffer.read(),
+                    timeout=10.0
+                )
+
+                if response.status_code == 200:
+                    result = response.json()
+                    text = result.get("DisplayText", "").strip()
+                    if text:
+                        self._last_final_text = text
+                        event = TranscriptEvent(
+                            text=text,
+                            is_final=True,
+                            confidence=result.get("RecognitionStatus") == "Success",
+                            speech_final=True,
+                            start_time=0,
+                            duration=0
+                        )
+                        logger.info(f"📝 Azure STT: \"{text}\"")
+                        if self.on_transcript:
+                            await self.on_transcript(event)
+                else:
+                    logger.error(f"Azure STT error: {response.status_code}")
+        except Exception as e:
+            logger.error(f"Azure STT error: {e}")
+        finally:
+            self._processing = False
+
+    async def close(self):
+        if len(self.audio_buffer) > 3200:
+            await self._process_buffer()
+        self.is_connected = False
 
     @property
     def last_final_text(self) -> str:
@@ -403,6 +521,8 @@ class STTStreamer:
             self.provider = OpenAIWhisperSTT(self.config)
         elif provider_name == "groq":
             self.provider = GroqWhisperSTT(self.config)
+        elif provider_name == "azure":
+            self.provider = AzureWhisperSTT(self.config)
         else:
             logger.warning(f"Unknown STT provider: {provider_name}, using Deepgram")
             self.provider = DeepgramSTT(self.config)
