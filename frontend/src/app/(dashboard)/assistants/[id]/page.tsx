@@ -673,7 +673,27 @@ export default function AssistantEditorPage() {
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
-            onClick={() => router.push(`/test-call?assistant=${params.id}`)}
+            onClick={() => {
+              // Save current form data before redirecting
+              localStorage.setItem("test_assistant", JSON.stringify({
+                id: params.id,
+                name: formData.name,
+                model_provider: formData.modelProvider,
+                model_name: formData.modelName,
+                system_prompt: formData.systemPrompt,
+                first_message: formData.firstMessage,
+                first_message_mode: formData.firstMessageMode,
+                temperature: formData.temperature,
+                max_tokens: formData.maxTokens,
+                voice_provider: formData.voiceProvider,
+                voice_id: formData.voiceId,
+                voice_speed: formData.voiceSpeed,
+                transcriber_provider: formData.transcriberProvider,
+                transcriber_model: formData.transcriberModel,
+                transcriber_language: formData.transcriberLanguage,
+              }));
+              router.push(`/live-call?assistant=${params.id}`);
+            }}
           >
             <Phone className="h-4 w-4 mr-2" />
             Test Call

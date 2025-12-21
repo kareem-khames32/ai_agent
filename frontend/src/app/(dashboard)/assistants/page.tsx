@@ -379,22 +379,23 @@ export default function AssistantsPage() {
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       onClick={() => {
-                        // Save assistant config for test-call to use
+                        // Save assistant config for live-call to use
                         localStorage.setItem("test_assistant", JSON.stringify({
                           id: assistant.id,
                           name: assistant.name,
-                          modelProvider: assistant.modelProvider,
-                          modelName: assistant.modelName,
-                          systemPrompt: assistant.systemPrompt,
-                          firstMessage: assistant.firstMessage,
-                          firstMessageMode: assistant.firstMessageMode,
+                          model_provider: assistant.modelProvider,
+                          model_name: assistant.modelName,
+                          system_prompt: assistant.systemPrompt,
+                          first_message: assistant.firstMessage,
+                          first_message_mode: assistant.firstMessageMode,
                           temperature: assistant.temperature,
-                          voiceProvider: assistant.voiceProvider,
-                          voiceId: assistant.voiceId,
-                          transcriberProvider: assistant.transcriberProvider,
-                          transcriberLanguage: assistant.transcriberLanguage,
+                          max_tokens: assistant.maxTokens || 1024,
+                          voice_provider: assistant.voiceProvider,
+                          voice_id: assistant.voiceId,
+                          transcriber_provider: assistant.transcriberProvider,
+                          transcriber_language: assistant.transcriberLanguage,
                         }));
-                        router.push(`/test-call?assistant=${assistant.id}`);
+                        router.push(`/live-call?assistant=${assistant.id}`);
                       }}
                     >
                       <Phone className="h-4 w-4 mr-2" />

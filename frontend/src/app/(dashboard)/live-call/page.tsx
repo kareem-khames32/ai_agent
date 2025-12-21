@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -97,6 +98,7 @@ const DEFAULT_ASSISTANTS: Assistant[] = [
 
 export default function LiveCallPage() {
   const { addToast } = useToast();
+  const searchParams = useSearchParams();
 
   // Hydration fix
   const [mounted, setMounted] = React.useState(false);
@@ -115,6 +117,51 @@ export default function LiveCallPage() {
 
   // Prompt (from selected assistant)
   const [systemPrompt, setSystemPrompt] = React.useState(DEFAULT_PROMPT);
+
+  // Load assistant from URL params / localStorage
+  React.useEffect(() => {
+    const assistantId = searchParams.get("assistant");
+    if (assistantId) {
+      // Try to load from test_assistant in localStorage
+      try {
+        const saved = localStorage.getItem("test_assistant");
+        if (saved) {
+          const testAssistant = JSON.parse(saved);
+          if (testAssistant.id === assistantId || testAssistant) {
+            // Create assistant object from saved data
+            const loadedAssistant: Assistant = {
+              id: testAssistant.id || assistantId,
+              name: testAssistant.name || "وكيل محمل",
+              system_prompt: testAssistant.system_prompt || testAssistant.systemPrompt || DEFAULT_PROMPT,
+              model_provider: testAssistant.model_provider || testAssistant.modelProvider || "openai",
+              model_name: testAssistant.model_name || testAssistant.modelName || "gpt-4o-mini",
+              voice_provider: testAssistant.voice_provider || testAssistant.voiceProvider || "openai",
+              voice_id: testAssistant.voice_id || testAssistant.voiceId || "alloy",
+              transcriber_provider: testAssistant.transcriber_provider || testAssistant.transcriberProvider || "deepgram",
+              transcriber_language: testAssistant.transcriber_language || testAssistant.transcriberLanguage || "ar",
+              temperature: testAssistant.temperature || 0.7,
+              max_tokens: testAssistant.max_tokens || testAssistant.maxTokens || 1024,
+            };
+
+            // Add to assistants list if not already there
+            setAssistants(prev => {
+              const exists = prev.find(a => a.id === loadedAssistant.id);
+              if (exists) return prev;
+              return [loadedAssistant, ...prev];
+            });
+
+            // Select this assistant
+            setSelectedAssistantId(loadedAssistant.id);
+            setSystemPrompt(loadedAssistant.system_prompt);
+
+            console.log("📋 Loaded assistant from localStorage:", loadedAssistant);
+          }
+        }
+      } catch (e) {
+        console.error("Failed to load assistant:", e);
+      }
+    }
+  }, [searchParams]);
 
   // Update prompt when assistant changes
   React.useEffect(() => {
