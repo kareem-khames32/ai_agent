@@ -1,9 +1,8 @@
 """
-Voice Activity Detection using Silero VAD
+Voice Activity Detection using Energy-based Detection
 Detects speech start/end with low latency
 """
 import numpy as np
-import torch
 from enum import Enum
 from typing import Optional, Callable
 from dataclasses import dataclass
@@ -34,14 +33,14 @@ class VADEvent:
 
 class VADProcessor:
     """
-    Voice Activity Detection using Silero VAD
+    Voice Activity Detection using Energy-based Detection
 
     State machine:
     SILENCE → SPEECH_START → SPEAKING → SPEECH_END → SILENCE
 
     Features:
     - Fast detection (<50ms)
-    - Adaptive threshold
+    - Adaptive threshold based on noise floor
     - Minimum speech duration filter
     - Configurable silence threshold
     """
@@ -50,14 +49,12 @@ class VADProcessor:
         self.config = config
         self.sample_rate = config.sample_rate_input
 
-        # Load Silero VAD model
-        self.model, self.utils = torch.hub.load(
-            repo_or_dir='snakers4/silero-vad',
-            model='silero_vad',
-            force_reload=False,
-            trust_repo=True
-        )
-        self.model.eval()
+        # Energy-based VAD parameters
+        self.energy_threshold = 0.01  # Base energy threshold
+        self.adaptive_threshold = 0.01
+        self.adaptation_rate = 0.05
+        self.min_energy = 0.005
+        self.speech_multiplier = 3.0  # Speech should be Nx noise floor
 
         # State
         self.state = VADState.SILENCE
@@ -67,7 +64,9 @@ class VADProcessor:
 
         # Buffers
         self.audio_buffer = np.array([], dtype=np.float32)
-        self.window_size = 512  # Silero VAD window size
+        self.window_size = 512  # Analysis window size (32ms at 16kHz)
+        self.energy_history: list = []
+        self.max_history = 50  # Keep track of last N energy values
 
         # Callbacks
         self.on_speech_start: Optional[Callable[[], None]] = None
@@ -82,7 +81,8 @@ class VADProcessor:
         self.last_speech_time = None
         self.silence_start_time = None
         self.audio_buffer = np.array([], dtype=np.float32)
-        self.model.reset_states()
+        self.energy_history = []
+        self.adaptive_threshold = self.energy_threshold
         logger.debug("VAD reset")
 
     def process(self, audio_chunk: bytes) -> Optional[VADEvent]:
@@ -108,26 +108,48 @@ class VADProcessor:
             window = self.audio_buffer[:self.window_size]
             self.audio_buffer = self.audio_buffer[self.window_size:]
 
-            # Run VAD
-            tensor = torch.from_numpy(window)
-            confidence = self.model(tensor, self.sample_rate).item()
+            # Calculate RMS energy
+            energy = np.sqrt(np.mean(window ** 2))
 
-            # Update state based on confidence
-            event = self._update_state(confidence)
+            # Update energy history for adaptive threshold
+            self.energy_history.append(energy)
+            if len(self.energy_history) > self.max_history:
+                self.energy_history.pop(0)
+
+            # Calculate adaptive threshold based on noise floor
+            if len(self.energy_history) >= 10:
+                # Use 20th percentile as noise floor estimate
+                noise_floor = np.percentile(self.energy_history, 20)
+                # Speech should be significantly above noise floor
+                self.adaptive_threshold = max(
+                    self.min_energy,
+                    noise_floor * self.speech_multiplier
+                )
+
+            # Calculate confidence (0-1 based on how much energy exceeds threshold)
+            if self.adaptive_threshold > 0:
+                confidence = min(1.0, energy / (self.adaptive_threshold * 2))
+            else:
+                confidence = 0.0
+
+            # Update state based on energy
+            new_event = self._update_state(energy, confidence)
+            if new_event:
+                event = new_event
 
         return event
 
-    def _update_state(self, confidence: float) -> Optional[VADEvent]:
-        """Update state machine based on VAD confidence"""
+    def _update_state(self, energy: float, confidence: float) -> Optional[VADEvent]:
+        """Update state machine based on energy level"""
         now = time.time()
-        is_speech = confidence >= self.config.vad_threshold
+        is_speech = energy >= self.adaptive_threshold
 
         if self.state == VADState.SILENCE:
             if is_speech:
                 # Potential speech start
                 self.speech_start_time = now
                 self.state = VADState.SPEECH_START
-                logger.info(f"🎤 Speech START (conf={confidence:.2f})")
+                logger.info(f"🎤 Speech START (energy={energy:.4f}, threshold={self.adaptive_threshold:.4f})")
 
                 if self.on_speech_start:
                     self.on_speech_start()
@@ -140,7 +162,7 @@ class VADProcessor:
 
         elif self.state == VADState.SPEECH_START:
             if is_speech:
-                # Confirm speech
+                # Confirm speech after minimum duration
                 speech_duration = (now - self.speech_start_time) * 1000
                 if speech_duration >= self.config.vad_min_speech_ms:
                     self.state = VADState.SPEAKING

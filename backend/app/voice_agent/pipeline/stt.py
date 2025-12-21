@@ -9,11 +9,7 @@ from typing import Optional, Callable, Awaitable
 from dataclasses import dataclass
 from enum import Enum
 
-from deepgram import (
-    DeepgramClient,
-    LiveTranscriptionEvents,
-    LiveOptions,
-)
+from deepgram import DeepgramClient
 
 from ..utils.logger import get_logger
 from ..config import VoiceAgentConfig
@@ -75,33 +71,35 @@ class DeepgramSTT:
                 return False
 
             self.client = DeepgramClient(api_key)
-            self.connection = self.client.listen.asynclive.v("1")
 
-            # Set up event handlers
-            self.connection.on(LiveTranscriptionEvents.Open, self._on_open)
-            self.connection.on(LiveTranscriptionEvents.Transcript, self._on_transcript)
-            self.connection.on(LiveTranscriptionEvents.SpeechStarted, self._on_speech_started)
-            self.connection.on(LiveTranscriptionEvents.UtteranceEnd, self._on_utterance_end)
-            self.connection.on(LiveTranscriptionEvents.Error, self._on_error)
-            self.connection.on(LiveTranscriptionEvents.Close, self._on_close)
+            # Get the live transcription client
+            self.connection = self.client.listen.websocket.v("1")
 
             # Configure options
-            options = LiveOptions(
-                model=self.config.stt_model,
-                language=self.config.stt_language,
-                punctuate=self.config.stt_punctuate,
-                interim_results=self.config.stt_interim_results,
-                endpointing=self.config.stt_endpointing_ms,
-                utterance_end_ms=1000,  # Utterance end detection
-                vad_events=True,
-                smart_format=True,
-                encoding="linear16",
-                sample_rate=self.config.sample_rate_input,
-                channels=self.config.channels,
-            )
+            options = {
+                "model": self.config.stt_model,
+                "language": self.config.stt_language,
+                "punctuate": self.config.stt_punctuate,
+                "interim_results": self.config.stt_interim_results,
+                "endpointing": self.config.stt_endpointing_ms,
+                "utterance_end_ms": 1000,
+                "vad_events": True,
+                "smart_format": True,
+                "encoding": "linear16",
+                "sample_rate": self.config.sample_rate_input,
+                "channels": self.config.channels,
+            }
+
+            # Register event handlers
+            self.connection.on("open", self._on_open)
+            self.connection.on("transcript", self._on_transcript)
+            self.connection.on("speech_started", self._on_speech_started)
+            self.connection.on("utterance_end", self._on_utterance_end)
+            self.connection.on("error", self._on_error)
+            self.connection.on("close", self._on_close)
 
             # Start connection
-            if await self.connection.start(options):
+            if self.connection.start(options):
                 self.is_connected = True
                 logger.info("✅ Deepgram connected")
                 return True
@@ -117,7 +115,7 @@ class DeepgramSTT:
         """Send audio chunk to Deepgram"""
         if self.connection and self.is_connected:
             try:
-                await self.connection.send(audio_chunk)
+                self.connection.send(audio_chunk)
             except Exception as e:
                 logger.error(f"Error sending audio: {e}")
 
@@ -125,7 +123,7 @@ class DeepgramSTT:
         """Close Deepgram connection"""
         if self.connection:
             try:
-                await self.connection.finish()
+                self.connection.finish()
             except Exception as e:
                 logger.debug(f"Error closing connection: {e}")
             finally:
@@ -139,11 +137,11 @@ class DeepgramSTT:
         self._last_final_text = ""
         logger.debug("STT reset")
 
-    async def _on_open(self, *args, **kwargs):
+    def _on_open(self, *args, **kwargs):
         """Handle connection open"""
         logger.debug("Deepgram WebSocket opened")
 
-    async def _on_transcript(self, *args, **kwargs):
+    def _on_transcript(self, *args, **kwargs):
         """Handle transcript result"""
         try:
             result = kwargs.get("result") or (args[1] if len(args) > 1 else None)
@@ -158,15 +156,15 @@ class DeepgramSTT:
                 return
 
             transcript = alternatives[0].transcript
-            confidence = alternatives[0].confidence
+            confidence = alternatives[0].confidence or 0.0
 
             if not transcript or not transcript.strip():
                 return
 
-            is_final = result.is_final
-            speech_final = result.speech_final
-            start = result.start
-            duration = result.duration
+            is_final = getattr(result, 'is_final', False)
+            speech_final = getattr(result, 'speech_final', False)
+            start = getattr(result, 'start', 0.0)
+            duration = getattr(result, 'duration', 0.0)
 
             # Create event
             event = TranscriptEvent(
@@ -187,29 +185,29 @@ class DeepgramSTT:
 
             # Invoke callback
             if self.on_transcript:
-                await self.on_transcript(event)
+                asyncio.create_task(self.on_transcript(event))
 
         except Exception as e:
             logger.error(f"Error processing transcript: {e}")
 
-    async def _on_speech_started(self, *args, **kwargs):
+    def _on_speech_started(self, *args, **kwargs):
         """Handle speech started event from Deepgram VAD"""
         logger.debug("🎤 Deepgram detected speech start")
         if self.on_speech_started:
-            await self.on_speech_started()
+            asyncio.create_task(self.on_speech_started())
 
-    async def _on_utterance_end(self, *args, **kwargs):
+    def _on_utterance_end(self, *args, **kwargs):
         """Handle utterance end event"""
         logger.info("🔇 Deepgram utterance end")
         if self.on_utterance_end:
-            await self.on_utterance_end()
+            asyncio.create_task(self.on_utterance_end())
 
-    async def _on_error(self, *args, **kwargs):
+    def _on_error(self, *args, **kwargs):
         """Handle error event"""
         error = kwargs.get("error") or (args[1] if len(args) > 1 else "Unknown error")
         logger.error(f"Deepgram error: {error}")
 
-    async def _on_close(self, *args, **kwargs):
+    def _on_close(self, *args, **kwargs):
         """Handle connection close"""
         self.is_connected = False
         logger.info("Deepgram connection closed")
