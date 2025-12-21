@@ -6,13 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Select } from "@/components/ui/select";
 import {
   Mic,
   MicOff,
@@ -567,25 +561,14 @@ export default function LiveCallPage() {
               </label>
               <Select
                 value={selectedAssistantId}
-                onValueChange={setSelectedAssistantId}
+                onChange={setSelectedAssistantId}
                 disabled={status === "connected"}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="اختر مساعد..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {assistants.map((assistant) => (
-                    <SelectItem key={assistant.id} value={assistant.id}>
-                      <div className="flex items-center gap-2">
-                        <span>{assistant.name}</span>
-                        <span className="text-xs text-[var(--muted-foreground)]">
-                          ({assistant.model_provider})
-                        </span>
-                      </div>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                placeholder="اختر مساعد..."
+                options={assistants.map((assistant) => ({
+                  value: assistant.id,
+                  label: `${assistant.name} (${assistant.model_provider})`,
+                }))}
+              />
               {selectedAssistant && (
                 <div className="flex flex-wrap gap-1 mt-2">
                   <Badge variant="outline" className="text-xs">
