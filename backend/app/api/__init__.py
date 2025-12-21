@@ -2,7 +2,7 @@
 API routes initialization
 """
 from fastapi import APIRouter
-from app.api.routes import auth, assistants, tools, phone_numbers, calls, voices, analytics, api_keys, settings, realtime
+from app.api.routes import auth, assistants, tools, phone_numbers, calls, voices, analytics, api_keys, settings
 
 api_router = APIRouter()
 
@@ -16,4 +16,3 @@ api_router.include_router(voices.router, prefix="/voices", tags=["Voices"])
 api_router.include_router(analytics.router, prefix="/analytics", tags=["Analytics"])
 api_router.include_router(api_keys.router, prefix="/api-keys", tags=["API Keys"])
 api_router.include_router(settings.router, prefix="/settings", tags=["Settings"])
-api_router.include_router(realtime.router, prefix="/realtime", tags=["Realtime Voice"])

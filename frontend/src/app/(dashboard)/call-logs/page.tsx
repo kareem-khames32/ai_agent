@@ -1000,7 +1000,7 @@ export default function CallLogsPage() {
                   ? "Start a new call to see logs here"
                   : "No results match your search"}
               </p>
-              <Button onClick={() => router.push("/live-call")}>
+              <Button onClick={() => router.push("/test-call")}>
                 <Phone className="h-4 w-4 mr-2" />
                 Start New Call
               </Button>

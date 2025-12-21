@@ -622,7 +622,7 @@ export default function AssistantEditorPage() {
 
       localStorage.setItem("assistants", JSON.stringify(assistants));
 
-      // Also save as test_assistant for live-call to use
+      // Also save as test_assistant for test-call to use
       localStorage.setItem("test_assistant", JSON.stringify({
         id: assistantId,
         name: formData.name,
@@ -673,7 +673,7 @@ export default function AssistantEditorPage() {
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
-            onClick={() => router.push(`/live-call?assistant=${params.id}`)}
+            onClick={() => router.push(`/test-call?assistant=${params.id}`)}
           >
             <Phone className="h-4 w-4 mr-2" />
             Test Call

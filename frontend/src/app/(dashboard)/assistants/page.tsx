@@ -379,7 +379,7 @@ export default function AssistantsPage() {
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       onClick={() => {
-                        // Save assistant config for live-call to use
+                        // Save assistant config for test-call to use
                         localStorage.setItem("test_assistant", JSON.stringify({
                           id: assistant.id,
                           name: assistant.name,
@@ -394,7 +394,7 @@ export default function AssistantsPage() {
                           transcriberProvider: assistant.transcriberProvider,
                           transcriberLanguage: assistant.transcriberLanguage,
                         }));
-                        router.push(`/live-call?assistant=${assistant.id}`);
+                        router.push(`/test-call?assistant=${assistant.id}`);
                       }}
                     >
                       <Phone className="h-4 w-4 mr-2" />
