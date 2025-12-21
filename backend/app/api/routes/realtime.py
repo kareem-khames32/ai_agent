@@ -912,8 +912,12 @@ class RealtimeVoiceSession:
             self.pending_transcript = new_text
             logger.info(f"📝 STT: '{new_text}' (final={result.is_final})")
 
-            # 🛡️ Don't start timer from is_final - let speech_ended handle it
-            # This prevents race condition where is_final timer fires before speech_ended
+            # 🎯 FIX: When is_final arrives with NEW text, process it!
+            # Azure is SLOW - sends complete transcript 2-3 seconds after speech_ended
+            # This catches the late-arriving text that was missed!
+            if result.is_final and not self.is_processing:
+                logger.info(f"📝 Late final - scheduling: '{new_text[:30]}...'")
+                self._start_turn_timer()
 
         except Exception as e:
             logger.error(f"❌ _on_transcript: {e}")
