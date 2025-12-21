@@ -30,21 +30,26 @@ class TTSProvider(ABC):
 
 
 class OpenAITTS(TTSProvider):
-    """OpenAI TTS Provider"""
+    """OpenAI TTS Provider - Using HTTP directly"""
 
     def __init__(self, config: VoiceAgentConfig):
         self.config = config
         self.api_key = config.tts_api_key or os.getenv("OPENAI_API_KEY")
-        self.client = None
+        self.client: Optional[httpx.AsyncClient] = None
 
     async def initialize(self):
-        """Initialize OpenAI client"""
+        """Initialize HTTP client"""
         if not self.api_key:
             logger.error("OpenAI TTS API key not set")
             return False
 
-        from openai import AsyncOpenAI
-        self.client = AsyncOpenAI(api_key=self.api_key)
+        self.client = httpx.AsyncClient(
+            timeout=30.0,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            }
+        )
         logger.info("✅ OpenAI TTS initialized")
         return True
 
@@ -58,15 +63,23 @@ class OpenAITTS(TTSProvider):
         try:
             logger.debug(f"🔊 TTS synthesizing: \"{text[:50]}...\"")
 
-            async with self.client.audio.speech.with_streaming_response.create(
-                model="tts-1",
-                voice=self.config.tts_voice,
-                input=text,
-                response_format="pcm",
-                speed=self.config.tts_speed
-            ) as response:
+            url = "https://api.openai.com/v1/audio/speech"
+            data = {
+                "model": "tts-1",
+                "voice": self.config.tts_voice or "alloy",
+                "input": text,
+                "response_format": "pcm",
+                "speed": self.config.tts_speed or 1.0
+            }
+
+            async with self.client.stream("POST", url, json=data) as response:
+                if response.status_code != 200:
+                    error = await response.aread()
+                    logger.error(f"OpenAI TTS error: {error}")
+                    return
+
                 first_chunk = True
-                async for chunk in response.iter_bytes(chunk_size=4096):
+                async for chunk in response.aiter_bytes(chunk_size=4096):
                     if first_chunk:
                         logger.debug("⚡ TTS first byte received")
                         first_chunk = False
@@ -79,7 +92,9 @@ class OpenAITTS(TTSProvider):
 
     async def close(self):
         """Close provider"""
-        self.client = None
+        if self.client:
+            await self.client.aclose()
+            self.client = None
 
 
 class ElevenLabsTTS(TTSProvider):

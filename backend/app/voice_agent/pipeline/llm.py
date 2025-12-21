@@ -2,12 +2,14 @@
 LLM Streaming Response
 Generates AI responses with streaming tokens
 Supports: OpenAI, Anthropic, Google, Groq, Together
+Uses HTTP directly - no SDK packages required
 """
 import os
 import asyncio
+import json
+import httpx
 from typing import Optional, Callable, Awaitable, AsyncGenerator, List, Any
 from dataclasses import dataclass, field
-from abc import ABC, abstractmethod
 
 from ..utils.logger import get_logger
 from ..config import VoiceAgentConfig
@@ -53,7 +55,7 @@ class LLMStreamer:
     """
     LLM Streaming Response Generator
 
-    Supports multiple providers:
+    Supports multiple providers (via HTTP - no SDK required):
     - OpenAI (gpt-4o, gpt-4o-mini)
     - Anthropic (claude-sonnet, claude-haiku)
     - Google (gemini-pro, gemini-flash)
@@ -63,9 +65,9 @@ class LLMStreamer:
 
     def __init__(self, config: VoiceAgentConfig):
         self.config = config
-        self.client: Any = None
         self.context = LLMContext(max_turns=config.llm_context_turns)
-        self.provider = config.llm_provider.lower()
+        self.provider = (config.llm_provider or "openai").lower()
+        self.api_key: Optional[str] = None
 
         # State
         self.is_generating = False
@@ -79,74 +81,43 @@ class LLMStreamer:
         logger.info(f"LLMStreamer initialized (provider={self.provider}, model={config.llm_model})")
 
     async def initialize(self) -> bool:
-        """Initialize LLM client based on provider"""
-        api_key = self.config.llm_api_key
+        """Initialize LLM - just validate API key"""
+        self.api_key = self.config.llm_api_key
 
         if self.provider == "openai":
-            api_key = api_key or os.getenv("OPENAI_API_KEY")
-            if not api_key:
+            self.api_key = self.api_key or os.getenv("OPENAI_API_KEY")
+            if not self.api_key:
                 logger.error("OpenAI API key not set")
                 return False
-            from openai import AsyncOpenAI
-            self.client = AsyncOpenAI(api_key=api_key)
-            logger.info("✅ OpenAI client initialized")
+            logger.info("✅ OpenAI LLM ready")
 
         elif self.provider == "anthropic":
-            api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
-            if not api_key:
+            self.api_key = self.api_key or os.getenv("ANTHROPIC_API_KEY")
+            if not self.api_key:
                 logger.error("Anthropic API key not set")
                 return False
-            try:
-                from anthropic import AsyncAnthropic
-                self.client = AsyncAnthropic(api_key=api_key)
-                logger.info("✅ Anthropic client initialized")
-            except ImportError:
-                logger.error("anthropic package not installed")
-                return False
+            logger.info("✅ Anthropic LLM ready")
 
         elif self.provider == "google":
-            api_key = api_key or os.getenv("GOOGLE_API_KEY")
-            if not api_key:
+            self.api_key = self.api_key or os.getenv("GOOGLE_API_KEY")
+            if not self.api_key:
                 logger.error("Google API key not set")
                 return False
-            try:
-                import google.generativeai as genai
-                genai.configure(api_key=api_key)
-                self.client = genai.GenerativeModel(self.config.llm_model)
-                logger.info("✅ Google AI client initialized")
-            except ImportError:
-                logger.error("google-generativeai package not installed")
-                return False
+            logger.info("✅ Google LLM ready")
 
         elif self.provider == "groq":
-            api_key = api_key or os.getenv("GROQ_API_KEY")
-            if not api_key:
+            self.api_key = self.api_key or os.getenv("GROQ_API_KEY")
+            if not self.api_key:
                 logger.error("Groq API key not set")
                 return False
-            try:
-                from groq import AsyncGroq
-                self.client = AsyncGroq(api_key=api_key)
-                logger.info("✅ Groq client initialized")
-            except ImportError:
-                # Groq uses OpenAI-compatible API
-                from openai import AsyncOpenAI
-                self.client = AsyncOpenAI(
-                    api_key=api_key,
-                    base_url="https://api.groq.com/openai/v1"
-                )
-                logger.info("✅ Groq client initialized (OpenAI compatible)")
+            logger.info("✅ Groq LLM ready")
 
         elif self.provider == "together":
-            api_key = api_key or os.getenv("TOGETHER_API_KEY")
-            if not api_key:
+            self.api_key = self.api_key or os.getenv("TOGETHER_API_KEY")
+            if not self.api_key:
                 logger.error("Together API key not set")
                 return False
-            from openai import AsyncOpenAI
-            self.client = AsyncOpenAI(
-                api_key=api_key,
-                base_url="https://api.together.xyz/v1"
-            )
-            logger.info("✅ Together client initialized")
+            logger.info("✅ Together LLM ready")
 
         else:
             logger.error(f"Unknown LLM provider: {self.provider}")
@@ -169,9 +140,9 @@ class LLMStreamer:
 
     async def generate_stream(self, user_input: str) -> AsyncGenerator[str, None]:
         """Generate streaming response"""
-        if not self.client:
+        if not self.api_key:
             if not await self.initialize():
-                logger.error("Failed to initialize LLM client")
+                logger.error("Failed to initialize LLM")
                 return
 
         self.add_user_message(user_input)
@@ -184,7 +155,7 @@ class LLMStreamer:
             logger.info(f"🤖 LLM generating ({self.provider}): \"{user_input[:50]}...\"")
 
             if self.provider in ["openai", "groq", "together"]:
-                async for token in self._stream_openai_compatible(user_input):
+                async for token in self._stream_openai_compatible():
                     if self.should_cancel:
                         break
                     full_response += token
@@ -198,7 +169,7 @@ class LLMStreamer:
                     yield token
 
             elif self.provider == "anthropic":
-                async for token in self._stream_anthropic(user_input):
+                async for token in self._stream_anthropic():
                     if self.should_cancel:
                         break
                     full_response += token
@@ -212,7 +183,7 @@ class LLMStreamer:
                     yield token
 
             elif self.provider == "google":
-                async for token in self._stream_google(user_input):
+                async for token in self._stream_google():
                     if self.should_cancel:
                         break
                     full_response += token
@@ -241,65 +212,177 @@ class LLMStreamer:
         finally:
             self.is_generating = False
 
-    async def _stream_openai_compatible(self, user_input: str) -> AsyncGenerator[str, None]:
-        """Stream from OpenAI-compatible API"""
-        stream = await self.client.chat.completions.create(
-            model=self.config.llm_model,
-            messages=self.context.get_messages_for_api(),
-            temperature=self.config.llm_temperature,
-            max_tokens=self.config.llm_max_tokens,
-            stream=True
-        )
-        first_token = True
-        async for chunk in stream:
-            if chunk.choices and chunk.choices[0].delta.content:
-                if first_token:
-                    logger.info("⚡ LLM first token received")
-                    first_token = False
-                yield chunk.choices[0].delta.content
+    async def _stream_openai_compatible(self) -> AsyncGenerator[str, None]:
+        """Stream from OpenAI-compatible API (OpenAI, Groq, Together)"""
+        if self.provider == "openai":
+            url = "https://api.openai.com/v1/chat/completions"
+        elif self.provider == "groq":
+            url = "https://api.groq.com/openai/v1/chat/completions"
+        elif self.provider == "together":
+            url = "https://api.together.xyz/v1/chat/completions"
+        else:
+            url = "https://api.openai.com/v1/chat/completions"
 
-    async def _stream_anthropic(self, user_input: str) -> AsyncGenerator[str, None]:
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+
+        data = {
+            "model": self.config.llm_model,
+            "messages": self.context.get_messages_for_api(),
+            "temperature": self.config.llm_temperature,
+            "max_tokens": self.config.llm_max_tokens,
+            "stream": True
+        }
+
+        first_token = True
+        async with httpx.AsyncClient() as client:
+            async with client.stream("POST", url, headers=headers, json=data, timeout=60.0) as response:
+                if response.status_code != 200:
+                    error = await response.aread()
+                    logger.error(f"LLM API error: {error}")
+                    return
+
+                async for line in response.aiter_lines():
+                    if self.should_cancel:
+                        break
+                    if line.startswith("data: "):
+                        data_str = line[6:]
+                        if data_str.strip() == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data_str)
+                            if chunk.get("choices") and chunk["choices"][0].get("delta", {}).get("content"):
+                                token = chunk["choices"][0]["delta"]["content"]
+                                if first_token:
+                                    logger.info("⚡ LLM first token received")
+                                    first_token = False
+                                yield token
+                        except json.JSONDecodeError:
+                            continue
+
+    async def _stream_anthropic(self) -> AsyncGenerator[str, None]:
         """Stream from Anthropic API"""
+        url = "https://api.anthropic.com/v1/messages"
+
+        headers = {
+            "x-api-key": self.api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json"
+        }
+
+        # Format messages for Anthropic
         messages = []
         for msg in self.context.messages:
             messages.append({"role": msg.role, "content": msg.content})
 
-        async with self.client.messages.stream(
-            model=self.config.llm_model,
-            max_tokens=self.config.llm_max_tokens,
-            system=self.context.system_prompt,
-            messages=messages,
-        ) as stream:
-            first_token = True
-            async for text in stream.text_stream:
-                if first_token:
-                    logger.info("⚡ LLM first token received")
-                    first_token = False
-                yield text
+        data = {
+            "model": self.config.llm_model,
+            "max_tokens": self.config.llm_max_tokens,
+            "system": self.context.system_prompt,
+            "messages": messages,
+            "stream": True
+        }
 
-    async def _stream_google(self, user_input: str) -> AsyncGenerator[str, None]:
-        """Stream from Google AI API"""
-        # Build conversation history
-        history = []
-        for msg in self.context.messages[:-1]:  # Exclude last message
-            role = "user" if msg.role == "user" else "model"
-            history.append({"role": role, "parts": [msg.content]})
-
-        chat = self.client.start_chat(history=history)
-
-        # Add system prompt to first message if set
-        prompt = user_input
-        if self.context.system_prompt and not history:
-            prompt = f"{self.context.system_prompt}\n\n{user_input}"
-
-        response = await chat.send_message_async(prompt, stream=True)
         first_token = True
-        async for chunk in response:
-            if chunk.text:
-                if first_token:
-                    logger.info("⚡ LLM first token received")
-                    first_token = False
-                yield chunk.text
+        async with httpx.AsyncClient() as client:
+            async with client.stream("POST", url, headers=headers, json=data, timeout=60.0) as response:
+                if response.status_code != 200:
+                    error = await response.aread()
+                    logger.error(f"Anthropic API error: {error}")
+                    return
+
+                async for line in response.aiter_lines():
+                    if self.should_cancel:
+                        break
+                    if line.startswith("data: "):
+                        data_str = line[6:]
+                        try:
+                            event = json.loads(data_str)
+                            if event.get("type") == "content_block_delta":
+                                delta = event.get("delta", {})
+                                if delta.get("type") == "text_delta":
+                                    token = delta.get("text", "")
+                                    if token:
+                                        if first_token:
+                                            logger.info("⚡ LLM first token received")
+                                            first_token = False
+                                        yield token
+                        except json.JSONDecodeError:
+                            continue
+
+    async def _stream_google(self) -> AsyncGenerator[str, None]:
+        """Stream from Google AI API"""
+        model = self.config.llm_model or "gemini-1.5-flash"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent"
+
+        headers = {"Content-Type": "application/json"}
+        params = {"key": self.api_key}
+
+        # Build contents
+        contents = []
+        for msg in self.context.messages:
+            role = "user" if msg.role == "user" else "model"
+            contents.append({"role": role, "parts": [{"text": msg.content}]})
+
+        data = {
+            "contents": contents,
+            "generationConfig": {
+                "temperature": self.config.llm_temperature,
+                "maxOutputTokens": self.config.llm_max_tokens
+            }
+        }
+
+        if self.context.system_prompt:
+            data["systemInstruction"] = {"parts": [{"text": self.context.system_prompt}]}
+
+        first_token = True
+        async with httpx.AsyncClient() as client:
+            async with client.stream("POST", url, headers=headers, params=params, json=data, timeout=60.0) as response:
+                if response.status_code != 200:
+                    error = await response.aread()
+                    logger.error(f"Google API error: {error}")
+                    return
+
+                buffer = ""
+                async for chunk in response.aiter_bytes():
+                    buffer += chunk.decode('utf-8')
+                    # Parse JSON objects from buffer
+                    while True:
+                        try:
+                            # Find complete JSON object
+                            start = buffer.find('{')
+                            if start == -1:
+                                break
+                            # Try to parse
+                            end = start + 1
+                            depth = 1
+                            while end < len(buffer) and depth > 0:
+                                if buffer[end] == '{':
+                                    depth += 1
+                                elif buffer[end] == '}':
+                                    depth -= 1
+                                end += 1
+                            if depth == 0:
+                                json_str = buffer[start:end]
+                                buffer = buffer[end:]
+                                obj = json.loads(json_str)
+                                candidates = obj.get("candidates", [])
+                                if candidates:
+                                    content = candidates[0].get("content", {})
+                                    parts = content.get("parts", [])
+                                    for part in parts:
+                                        text = part.get("text", "")
+                                        if text:
+                                            if first_token:
+                                                logger.info("⚡ LLM first token received")
+                                                first_token = False
+                                            yield text
+                            else:
+                                break
+                        except json.JSONDecodeError:
+                            break
 
     async def generate(self, user_input: str) -> str:
         """Generate complete response (non-streaming)"""
