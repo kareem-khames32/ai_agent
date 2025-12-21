@@ -651,6 +651,10 @@ class RealtimeVoiceSession:
         self.pending_transcript: str = ""  # What user said (waiting to process)
         self._last_processed: str = ""  # Duplicate prevention
 
+        # 🎯 Azure cumulative fix - baseline to strip from cumulative transcripts
+        self._transcript_baseline: str = ""  # Previous turns (to strip from new)
+        self._azure_cumulative: str = ""  # Raw cumulative from Azure
+
         # Simple timing
         self.speech_start_time: float = 0
         self.user_is_speaking: bool = False
@@ -877,25 +881,34 @@ class RealtimeVoiceSession:
 
     async def _on_transcript(self, result: TranscriptResult):
         """
-        🎯 ULTRA-SIMPLE with STRONG DEDUP protection
+        🎯 FIX: Azure sends CUMULATIVE transcripts (includes ALL previous turns!)
+        We strip the baseline (previous turns) to get only current turn.
         """
         try:
-            text = result.text.strip()
-            if not text:
+            raw_text = result.text.strip()
+            if not raw_text:
                 return
 
-            # 🛡️ STRONG DEDUP: Skip if same text processed recently
-            now = time.time()
-            last_time = getattr(self, '_last_transcript_time', 0)
-            if text == self._last_processed and (now - last_time) < 3.0:
-                return  # Skip silently
+            # Save raw cumulative for baseline calculation
+            self._azure_cumulative = raw_text
 
-            # 🎯 Store transcript (REPLACE)
-            self.pending_transcript = text
-            self._last_transcript_time = now
+            # 🎯 KEY FIX: Strip previous turns from cumulative transcript
+            baseline = getattr(self, '_transcript_baseline', '')
+            if baseline and raw_text.startswith(baseline):
+                new_text = raw_text[len(baseline):].strip()
+            else:
+                new_text = raw_text
 
-            # Log what we got
-            logger.info(f"📝 STT: '{text}' (final={result.is_final})")
+            if not new_text:
+                return  # Nothing new
+
+            # 🛡️ DEDUP: Skip if same as last processed
+            if new_text == self._last_processed:
+                return
+
+            # Store only the NEW part
+            self.pending_transcript = new_text
+            logger.info(f"📝 STT: '{new_text}' (final={result.is_final})")
 
             # Start timer on final
             if result.is_final:
@@ -996,14 +1009,18 @@ class RealtimeVoiceSession:
 
     async def _on_speech_ended(self):
         """
-        🎯 Speech ended - START TIMER if we have pending transcript!
-        Azure often sends ONLY interim (final=False), so we MUST process on speech end
+        🎯 Speech ended - START TIMER and UPDATE BASELINE!
         """
         try:
             self.user_is_speaking = False
 
-            # 🎯 KEY FIX: Process interim transcript when speech ends!
-            # Azure doesn't always send final=True
+            # 🎯 KEY: Update baseline with the FULL cumulative text from Azure
+            # This prevents next turn from including old text
+            if hasattr(self, '_azure_cumulative') and self._azure_cumulative:
+                self._transcript_baseline = self._azure_cumulative
+                logger.debug(f"📌 Baseline updated: '{self._transcript_baseline[:30]}...'")
+
+            # Process if we have transcript and AI not busy
             if self.pending_transcript.strip():
                 if not (self.is_speaking or self.is_thinking or self.is_processing):
                     logger.info(f"🔇 Speech ended - processing: '{self.pending_transcript[:40]}...'")
