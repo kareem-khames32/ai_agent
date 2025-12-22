@@ -236,11 +236,17 @@ class VoiceAgent:
 
     # STT Callbacks
     async def _on_stt_transcript(self, event: TranscriptEvent):
-        """Handle STT transcript"""
+        """
+        Handle STT transcript.
+
+        ⚠️ IMPORTANT: STT results are ONLY buffered by turn detector!
+        is_final and speech_final are IGNORED for turn decisions!
+        Turn completion is based on VAD ONLY!
+        """
         if event.is_final:
             self.latency.mark("stt_final")
 
-        # Update turn detector
+        # Buffer text in turn detector (is_final/speech_final are IGNORED!)
         await self.turn_detector.on_transcript(
             event.text,
             event.is_final,
@@ -252,12 +258,19 @@ class VoiceAgent:
             await self.on_transcript(event.text, event.is_final)
 
     async def _on_stt_speech_started(self):
-        """STT detected speech"""
+        """STT detected speech - not used for turn detection"""
         pass
 
     async def _on_stt_utterance_end(self):
-        """STT detected utterance end"""
-        await self.turn_detector.on_utterance_end()
+        """
+        STT detected utterance end.
+
+        ⚠️ IGNORED! We don't use STT endpoint for turn decisions!
+        Turn completion is based on VAD silence ONLY!
+        """
+        # Previously this would trigger turn completion - NOT ANYMORE!
+        # await self.turn_detector.on_utterance_end()  # DISABLED!
+        pass
 
     # Turn Detector Callbacks
     async def _on_turn_start(self):
