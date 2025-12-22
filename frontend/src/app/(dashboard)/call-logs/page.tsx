@@ -789,7 +789,7 @@ export default function CallLogsPage() {
   const [selectedCallIndex, setSelectedCallIndex] = React.useState<number | null>(null);
   const [loading, setLoading] = React.useState(true);
 
-  // Load call logs from IndexedDB
+  // Load call logs from both IndexedDB and Server API
   React.useEffect(() => {
     // First migrate any old localStorage data
     migrateFromLocalStorage().then((migrated) => {
@@ -803,9 +803,52 @@ export default function CallLogsPage() {
   const loadCallLogs = async () => {
     setLoading(true);
     try {
-      const logs = await getAllCallLogs();
-      setCallLogs(logs as CallLog[]);
-      console.log(`📊 Loaded ${logs.length} call logs from IndexedDB`);
+      // Load from IndexedDB (client-side)
+      const localLogs = await getAllCallLogs() as CallLog[];
+      console.log(`📊 Loaded ${localLogs.length} call logs from IndexedDB`);
+
+      // Load from Server API (server-side recordings)
+      let serverLogs: CallLog[] = [];
+      try {
+        const response = await fetch("http://localhost:8000/api/call-logs");
+        if (response.ok) {
+          const data = await response.json();
+          // Convert server format to local format
+          serverLogs = (data.calls || []).map((call: any) => ({
+            id: call.call_id,
+            assistantId: call.assistant_id || "",
+            assistantName: call.assistant_name || "Unknown",
+            startTime: call.started_at,
+            endTime: call.ended_at || call.started_at,
+            duration: call.duration_sec || 0,
+            status: call.status === "completed" ? "completed" : "failed",
+            transcript: [],
+            metadata: {
+              llmProvider: call.voice_mode,
+              llmModel: call.realtime_provider || "pipeline",
+            },
+            cost: {
+              stt: { minutes: 0, provider: "", cost: 0 },
+              llm: { input_tokens: 0, output_tokens: 0, provider: "", model: "", cost: 0 },
+              tts: { characters: 0, provider: "", cost: 0 },
+              total_cost: call.total_cost || 0,
+            },
+            _isServerLog: true,  // Mark as server log for special handling
+          }));
+          console.log(`📊 Loaded ${serverLogs.length} call logs from Server API`);
+        }
+      } catch (e) {
+        console.log("Server API not available, using local logs only");
+      }
+
+      // Merge and deduplicate (prefer local logs if same ID)
+      const localIds = new Set(localLogs.map(l => l.id));
+      const mergedLogs = [
+        ...localLogs,
+        ...serverLogs.filter(s => !localIds.has(s.id))
+      ].sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
+
+      setCallLogs(mergedLogs);
     } catch (e) {
       console.error("Failed to load call logs:", e);
       setCallLogs([]);
@@ -816,7 +859,18 @@ export default function CallLogsPage() {
 
   const deleteCallLog = async (id: string) => {
     try {
+      // Delete from IndexedDB
       await deleteCallLogFromDB(id);
+
+      // Also try to delete from server
+      try {
+        await fetch(`http://localhost:8000/api/call-logs/${id}`, {
+          method: "DELETE",
+        });
+      } catch (e) {
+        // Server delete failed, that's ok
+      }
+
       const updated = callLogs.filter((log) => log.id !== id);
       setCallLogs(updated);
       if (selectedCallIndex !== null && filteredLogs[selectedCallIndex]?.id === id) {
