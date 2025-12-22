@@ -626,21 +626,24 @@ export default function AssistantEditorPage() {
       localStorage.setItem("test_assistant", JSON.stringify({
         id: assistantId,
         name: formData.name,
-        modelProvider: formData.modelProvider,
-        modelName: formData.modelName,
-        systemPrompt: formData.systemPrompt,
-        firstMessage: formData.firstMessage,
-        firstMessageMode: formData.firstMessageMode,
+        model_provider: formData.modelProvider,
+        model_name: formData.modelName,
+        system_prompt: formData.systemPrompt,
+        first_message: formData.firstMessage,
+        first_message_mode: formData.firstMessageMode,
         temperature: formData.temperature,
-        voiceProvider: formData.voiceProvider,
-        voiceId: formData.voiceId,
-        voiceSpeed: formData.voiceSpeed,
-        transcriberProvider: formData.transcriberProvider,
-        transcriberModel: formData.transcriberModel,
-        transcriberLanguage: formData.transcriberLanguage,
-        // Interruption settings
-        interruptionEnabled: formData.interruptionEnabled,
-        interruptionWordsThreshold: formData.interruptionWordsThreshold,
+        max_tokens: formData.maxTokens,
+        voice_provider: formData.voiceProvider,
+        voice_id: formData.voiceId,
+        voice_speed: formData.voiceSpeed,
+        transcriber_provider: formData.transcriberProvider,
+        transcriber_model: formData.transcriberModel,
+        transcriber_language: formData.transcriberLanguage,
+        // Stop Speaking Plan (barge-in/interruption settings)
+        stop_speaking_plan: {
+          enable_interruption: formData.interruptionEnabled,
+          interruption_words: formData.interruptionWordsThreshold,
+        },
       }));
 
       console.log("✅ Assistant saved:", assistantId);
@@ -691,6 +694,11 @@ export default function AssistantEditorPage() {
                 transcriber_provider: formData.transcriberProvider,
                 transcriber_model: formData.transcriberModel,
                 transcriber_language: formData.transcriberLanguage,
+                // Stop Speaking Plan (barge-in/interruption settings)
+                stop_speaking_plan: {
+                  enable_interruption: formData.interruptionEnabled,
+                  interruption_words: formData.interruptionWordsThreshold,
+                },
               }));
               router.push(`/live-call?assistant=${params.id}`);
             }}

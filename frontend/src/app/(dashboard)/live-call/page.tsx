@@ -31,6 +31,11 @@ interface TranscriptEntry {
   isFinal?: boolean;
 }
 
+interface StopSpeakingPlan {
+  enable_interruption: boolean;
+  interruption_words: number;
+}
+
 interface Assistant {
   id: string;
   name: string;
@@ -43,6 +48,7 @@ interface Assistant {
   transcriber_language: string;
   temperature?: number;
   max_tokens?: number;
+  stop_speaking_plan?: StopSpeakingPlan;
 }
 
 type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
@@ -141,6 +147,11 @@ export default function LiveCallPage() {
               transcriber_language: testAssistant.transcriber_language || testAssistant.transcriberLanguage || "ar",
               temperature: testAssistant.temperature || 0.7,
               max_tokens: testAssistant.max_tokens || testAssistant.maxTokens || 1024,
+              // Load stop_speaking_plan (barge-in settings)
+              stop_speaking_plan: testAssistant.stop_speaking_plan || testAssistant.stopSpeakingPlan || {
+                enable_interruption: true,
+                interruption_words: 2,
+              },
             };
 
             // Add to assistants list if not already there
@@ -256,6 +267,11 @@ export default function LiveCallPage() {
               transcriber_language: selectedAssistant.transcriber_language,
               temperature: selectedAssistant.temperature || 0.7,
               max_tokens: selectedAssistant.max_tokens || 200,
+              // Barge-in (interruption) settings
+              stop_speaking_plan: selectedAssistant.stop_speaking_plan || {
+                enable_interruption: true,
+                interruption_words: 2,
+              },
             },
             credentials: credentials,
           })

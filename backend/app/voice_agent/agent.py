@@ -207,13 +207,20 @@ class VoiceAgent:
                         logger.debug(f"Barge-in ignored: low energy ({energy:.4f} < {self._bargein_energy_threshold})")
                         return
 
+                    # Save what AI was saying when interruption started
+                    self._partial_ai_response = self._current_ai_response
+
+                    # If interruption_words is 0, trigger IMMEDIATE barge-in
+                    if self._interruption_words_required <= 0:
+                        logger.info(f"🎤 IMMEDIATE barge-in triggered (0 words required, energy={energy:.4f})")
+                        await self._handle_bargein("")
+                        return
+
                     # Start barge-in detection - we'll wait for N words
                     self._bargein_detecting = True
                     self._bargein_word_count = 0
                     self._bargein_text_buffer = ""
                     self._bargein_start_time = time.time()
-                    # Save what AI was saying when interruption started
-                    self._partial_ai_response = self._current_ai_response
                     logger.info(f"🎤 Barge-in detection started (need {self._interruption_words_required} words, energy={energy:.4f})")
 
             # Check if user stopped speaking during barge-in detection

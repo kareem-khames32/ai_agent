@@ -125,6 +125,10 @@ async def voice_agent_websocket(
                     if assistant_data:
                         config = create_config_from_assistant(assistant_data, credentials)
                         logger.info(f"📋 Config from assistant: LLM={config.llm_provider}/{config.llm_model}, TTS={config.tts_provider}, STT={config.stt_provider}")
+                        logger.info(f"📋 Stop Speaking Plan: enable_interruption={config.enable_interruption}, interruption_words={config.interruption_words}")
+                        # Log the raw assistant data for debugging
+                        stop_plan = assistant_data.get("stop_speaking_plan", {})
+                        logger.debug(f"📋 Raw stop_speaking_plan from frontend: {stop_plan}")
                     else:
                         config = get_config()
                         logger.info(f"📋 Using default config")
