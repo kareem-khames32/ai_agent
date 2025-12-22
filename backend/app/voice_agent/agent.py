@@ -87,6 +87,7 @@ class VoiceAgent:
         self._bargein_timeout_ms = 3000  # Max time to wait for words (3 seconds)
         self._current_ai_response = ""   # What AI is currently saying (for context)
         self._partial_ai_response = ""   # What AI was saying when interrupted
+        self._in_speaking_mode = False   # Flag to block VAD callbacks during SPEAKING
 
         # Wire up callbacks
         self._setup_callbacks()
@@ -188,6 +189,9 @@ class VoiceAgent:
 
         # Handle barge-in (only if VAD available and interruption enabled)
         if self.state == AgentState.SPEAKING and self.vad and VADState and self._enable_interruption:
+            # Set flag BEFORE vad.process() to prevent callbacks from triggering turn detector
+            self._in_speaking_mode = True
+
             # Process VAD to detect user speech
             vad_event = self.vad.process(audio_chunk)
 
@@ -353,23 +357,28 @@ class VoiceAgent:
             self.state = new_state
             logger.info(f"📊 State: {old_state.value} → {new_state.value}")
 
+            # Reset speaking mode flag when leaving SPEAKING state
+            if old_state == AgentState.SPEAKING:
+                self._in_speaking_mode = False
+                logger.debug("_in_speaking_mode reset to False")
+
             if self.on_state_change:
                 await self.on_state_change(new_state)
 
     # VAD Callbacks
     def _on_vad_speech_start(self):
         """VAD detected speech start"""
-        # Don't trigger turn detection during SPEAKING state or barge-in detection
-        if self.state == AgentState.SPEAKING or self._bargein_detecting:
-            logger.debug(f"VAD speech start ignored - state={self.state.value}, bargein={self._bargein_detecting}")
+        # CRITICAL: Check _in_speaking_mode FIRST - it's set before vad.process()
+        if self._in_speaking_mode or self._bargein_detecting:
+            logger.debug(f"VAD speech_start BLOCKED - speaking_mode={self._in_speaking_mode}, bargein={self._bargein_detecting}")
             return
         asyncio.create_task(self.turn_detector.on_speech_start())
 
     def _on_vad_speech_end(self, duration_ms: float):
         """VAD detected speech end"""
-        # Don't trigger turn detection during SPEAKING state or barge-in detection
-        if self.state == AgentState.SPEAKING or self._bargein_detecting:
-            logger.debug(f"VAD speech end ignored - state={self.state.value}, bargein={self._bargein_detecting}")
+        # CRITICAL: Check _in_speaking_mode FIRST - it's set before vad.process()
+        if self._in_speaking_mode or self._bargein_detecting:
+            logger.debug(f"VAD speech_end BLOCKED - speaking_mode={self._in_speaking_mode}, bargein={self._bargein_detecting}")
             return
         self.latency.mark("speech_end")
         asyncio.create_task(self.turn_detector.on_speech_end())
