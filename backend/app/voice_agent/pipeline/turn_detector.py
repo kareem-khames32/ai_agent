@@ -46,6 +46,7 @@ class TurnDetector:
     2. End punctuation (reduces required silence)
     3. STT endpoint detection
     4. Maximum wait time (fallback)
+    5. Minimum utterance length (prevents premature completion)
 
     Goal: Minimize latency while avoiding interruptions
     """
@@ -71,6 +72,17 @@ class TurnDetector:
         self.base_silence_ms = config.turn_silence_ms
         self.punctuation_silence_ms = config.turn_silence_ms // 2  # Faster with punctuation
         self.max_wait_ms = config.turn_max_wait_ms
+
+        # Minimum utterance settings (prevent premature completion)
+        self.min_words_for_quick_turn = 4  # Need at least 4 words for quick turn
+        self.short_utterance_silence_ms = 1200  # Wait longer for short utterances
+
+        # Quick response words (complete immediately with short silence)
+        self.quick_responses = {
+            "نعم", "لا", "ايوه", "أيوه", "لأ", "ماشي", "تمام", "طيب", "حاضر",
+            "اه", "آه", "مم", "اوك", "اوكي", "صح", "غلط", "موافق",
+            "yes", "no", "ok", "okay", "yeah", "yep", "nope"
+        }
 
         logger.info(f"TurnDetector initialized (silence={self.base_silence_ms}ms, punct_silence={self.punctuation_silence_ms}ms)")
 
@@ -170,23 +182,23 @@ class TurnDetector:
         now = time.time()
         silence_ms = (now - self.last_speech_time) * 1000
 
-        # Determine required silence based on punctuation
+        # Get full text and determine required silence
         full_text = self._get_full_text()
-        has_end_punct = self._has_end_punctuation(full_text)
-
-        required_silence = self.punctuation_silence_ms if has_end_punct else self.base_silence_ms
+        required_silence = self._get_required_silence(full_text)
+        word_count = self._get_word_count(full_text)
+        is_quick = self._is_quick_response(full_text)
 
         # Check max wait time
         if self.turn_start_time:
             turn_duration = (now - self.turn_start_time) * 1000
             if turn_duration > self.max_wait_ms and full_text:
-                logger.info(f"⏰ Max wait reached ({turn_duration:.0f}ms)")
+                logger.info(f"⏰ Max wait reached ({turn_duration:.0f}ms, words={word_count})")
                 await self._complete_turn()
                 return True
 
         # Check silence threshold
         if silence_ms >= required_silence and full_text:
-            logger.info(f"🔇 Silence threshold reached ({silence_ms:.0f}ms >= {required_silence}ms, punct={has_end_punct})")
+            logger.info(f"🔇 Silence threshold reached ({silence_ms:.0f}ms >= {required_silence}ms, words={word_count}, quick={is_quick})")
             await self._complete_turn()
             return True
 
@@ -200,15 +212,25 @@ class TurnDetector:
             return
 
         has_punct = self._has_end_punctuation(full_text)
+        is_quick = self._is_quick_response(full_text)
+        word_count = self._get_word_count(full_text)
 
-        if has_punct:
-            # Complete turn immediately with punctuation
+        # Only complete immediately for quick responses with punctuation
+        # This allows "نعم." or "لا." to complete immediately
+        if has_punct and is_quick:
+            logger.debug(f"Quick response with punctuation, completing: \"{full_text}\"")
+            await self._complete_turn()
+        elif has_punct and word_count >= self.min_words_for_quick_turn:
+            # Complete for longer sentences with punctuation
+            logger.debug(f"Full sentence with punctuation, completing: \"{full_text}\"")
             await self._complete_turn()
         else:
-            # Move to pending state
+            # Move to pending state and wait for silence threshold
+            # This prevents cutting off speech mid-sentence
             if self.state == TurnState.LISTENING:
                 self.state = TurnState.PENDING
                 self.pending_start_time = time.time()
+                logger.debug(f"Pending (words={word_count}, punct={has_punct}, quick={is_quick}): \"{full_text}\"")
 
     async def _complete_turn(self):
         """Complete the current turn"""
@@ -218,7 +240,8 @@ class TurnDetector:
             self.reset()
             return
 
-        logger.info(f"✅ Turn COMPLETE: \"{full_text}\"")
+        word_count = self._get_word_count(full_text)
+        logger.info(f"✅ Turn COMPLETE ({word_count} words): \"{full_text}\"")
 
         self.state = TurnState.TURN_COMPLETE
 
@@ -252,6 +275,51 @@ class TurnDetector:
             return True
 
         return False
+
+    def _get_word_count(self, text: str) -> int:
+        """Get word count from text"""
+        if not text:
+            return 0
+        # Split by whitespace and filter empty strings
+        words = [w for w in text.split() if w.strip()]
+        return len(words)
+
+    def _is_quick_response(self, text: str) -> bool:
+        """Check if text is a quick response word"""
+        if not text:
+            return False
+        # Normalize and check
+        normalized = text.strip().lower()
+        # Remove punctuation for comparison
+        normalized = re.sub(r'[.؟!،:؛?!,;:]', '', normalized).strip()
+        return normalized in self.quick_responses or normalized in {r.lower() for r in self.quick_responses}
+
+    def _get_required_silence(self, text: str) -> float:
+        """
+        Get required silence duration based on utterance characteristics
+
+        Short utterances need longer silence to avoid cutting off speech.
+        Quick responses (yes/no/etc) can complete faster.
+        Punctuation also reduces required silence.
+        """
+        word_count = self._get_word_count(text)
+        has_punct = self._has_end_punctuation(text)
+        is_quick = self._is_quick_response(text)
+
+        # Quick responses (نعم، لا، ايوه، etc.) - complete fast
+        if is_quick:
+            return self.punctuation_silence_ms
+
+        # Short utterances (< 4 words) - wait longer
+        if word_count < self.min_words_for_quick_turn:
+            return self.short_utterance_silence_ms
+
+        # Normal utterances with punctuation - faster
+        if has_punct:
+            return self.punctuation_silence_ms
+
+        # Normal utterances without punctuation
+        return self.base_silence_ms
 
     @property
     def is_active(self) -> bool:
