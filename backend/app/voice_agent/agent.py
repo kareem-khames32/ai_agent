@@ -359,17 +359,17 @@ class VoiceAgent:
     # VAD Callbacks
     def _on_vad_speech_start(self):
         """VAD detected speech start"""
-        # Don't trigger turn detection during SPEAKING state (barge-in mode)
-        if self.state == AgentState.SPEAKING:
-            logger.debug("VAD speech start ignored - in SPEAKING state (barge-in mode)")
+        # Don't trigger turn detection during SPEAKING state or barge-in detection
+        if self.state == AgentState.SPEAKING or self._bargein_detecting:
+            logger.debug(f"VAD speech start ignored - state={self.state.value}, bargein={self._bargein_detecting}")
             return
         asyncio.create_task(self.turn_detector.on_speech_start())
 
     def _on_vad_speech_end(self, duration_ms: float):
         """VAD detected speech end"""
-        # Don't trigger turn detection during SPEAKING state (barge-in mode)
-        if self.state == AgentState.SPEAKING:
-            logger.debug("VAD speech end ignored - in SPEAKING state (barge-in mode)")
+        # Don't trigger turn detection during SPEAKING state or barge-in detection
+        if self.state == AgentState.SPEAKING or self._bargein_detecting:
+            logger.debug(f"VAD speech end ignored - state={self.state.value}, bargein={self._bargein_detecting}")
             return
         self.latency.mark("speech_end")
         asyncio.create_task(self.turn_detector.on_speech_end())
@@ -387,7 +387,8 @@ class VoiceAgent:
             self.latency.mark("stt_final")
 
         # Handle barge-in word counting during detection
-        if self._bargein_detecting and self.state == AgentState.SPEAKING:
+        # Check for SPEAKING OR LISTENING (state might change during detection)
+        if self._bargein_detecting:
             if event.text and event.text.strip():
                 # Count words in the transcript
                 words = event.text.strip().split()
@@ -397,13 +398,16 @@ class VoiceAgent:
                 self._bargein_text_buffer = event.text.strip()
                 self._bargein_word_count = word_count
 
-                logger.debug(f"🎤 Barge-in words: {word_count}/{self._interruption_words_required} - \"{event.text}\"")
+                logger.info(f"🎤 Barge-in words: {word_count}/{self._interruption_words_required} - \"{event.text}\" (state={self.state.value})")
 
                 # Check if we have enough words to confirm barge-in
                 if word_count >= self._interruption_words_required:
                     logger.info(f"🎤 Barge-in confirmed with {word_count} words!")
                     await self._handle_bargein(self._bargein_text_buffer)
                     return
+
+            # Don't process normally if we're in barge-in detection
+            return
 
         # Normal transcript handling (when not in barge-in detection)
         if self.state in (AgentState.LISTENING, AgentState.IDLE):
