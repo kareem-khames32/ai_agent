@@ -75,7 +75,7 @@ class VoiceAgent:
         self._pending_tts_count = 0   # Track pending TTS sentences
         self._last_tts_audio_time = 0.0  # Track when last TTS audio was sent
         self._bargein_cooldown_ms = config.interruption_cooldown_ms
-        self._bargein_energy_threshold = 0.03  # Lower threshold for barge-in
+        self._bargein_energy_threshold = 0.005  # Very low threshold - trust echo cancellation
 
         # Barge-in (Interruption) tracking
         self._enable_interruption = config.enable_interruption
@@ -177,10 +177,24 @@ class VoiceAgent:
         if not self._is_running:
             return
 
+        # Debug: Log state periodically (every ~1 second worth of audio)
+        if len(audio_chunk) > 0 and hasattr(self, '_audio_chunk_count'):
+            self._audio_chunk_count += 1
+        else:
+            self._audio_chunk_count = 1
+
+        if self._audio_chunk_count % 25 == 1:  # Log every ~0.5 second
+            logger.info(f"📊 Audio: state={self.state.value}, vad={self.vad is not None}, intr={self._enable_interruption}, detecting={self._bargein_detecting}")
+
         # Handle barge-in (only if VAD available and interruption enabled)
         if self.state == AgentState.SPEAKING and self.vad and VADState and self._enable_interruption:
             # Process VAD to detect user speech
             vad_event = self.vad.process(audio_chunk)
+
+            # Log VAD events for debugging
+            if vad_event:
+                energy = getattr(vad_event, 'energy', 0) or 0
+                logger.info(f"🎤 VAD during SPEAKING: {vad_event.state.value}, energy={energy:.4f}")
 
             # Check for barge-in timeout
             if self._bargein_detecting:
@@ -193,19 +207,20 @@ class VoiceAgent:
 
             # Check for speech during AI response
             if vad_event and vad_event.state == VADState.SPEECH_START:
-                # Check energy threshold for barge-in (filter out echo/noise)
                 energy = getattr(vad_event, 'energy', 0) or 0
+                logger.info(f"🎤 SPEECH_START detected during SPEAKING! energy={energy:.4f}")
 
                 # Only apply cooldown check on first speech detection
                 if not self._bargein_detecting:
                     time_since_tts = (time.time() - self._last_tts_audio_time) * 1000
                     if time_since_tts < self._bargein_cooldown_ms:
-                        logger.debug(f"Barge-in ignored: cooldown ({time_since_tts:.0f}ms < {self._bargein_cooldown_ms}ms)")
+                        logger.info(f"🎤 Barge-in ignored: cooldown ({time_since_tts:.0f}ms < {self._bargein_cooldown_ms}ms)")
                         return
 
-                    if energy < self._bargein_energy_threshold:
-                        logger.debug(f"Barge-in ignored: low energy ({energy:.4f} < {self._bargein_energy_threshold})")
-                        return
+                    # Skip energy threshold check - trust browser echo cancellation
+                    # if energy < self._bargein_energy_threshold:
+                    #     logger.info(f"🎤 Barge-in ignored: low energy ({energy:.4f})")
+                    #     return
 
                     # Save what AI was saying when interruption started
                     self._partial_ai_response = self._current_ai_response
@@ -450,6 +465,10 @@ class VoiceAgent:
             self.latency.mark("tts_start")
             # Reset AI response tracking for new response
             self._current_ai_response = ""
+            # Reset VAD for clean barge-in detection
+            if self.vad:
+                self.vad.reset()
+                logger.debug("VAD reset for barge-in detection")
 
         # Track what AI is saying (for barge-in context)
         self._current_ai_response += sentence + " "

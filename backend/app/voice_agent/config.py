@@ -30,7 +30,7 @@ class VoiceAgentConfig:
     # Barge-in (Interruption) Settings
     enable_interruption: bool = True    # Allow customer to interrupt
     interruption_words: int = 2         # Words required to trigger interruption
-    interruption_cooldown_ms: int = 300 # Cooldown after TTS to prevent echo
+    interruption_cooldown_ms: int = 150 # Short cooldown - trust browser echo cancellation
 
     # STT Settings
     stt_provider: str = "deepgram"
