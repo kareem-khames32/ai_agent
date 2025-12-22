@@ -83,6 +83,8 @@ class VoiceAgent:
         self._bargein_detecting = False  # Currently detecting barge-in
         self._bargein_word_count = 0     # Words detected during barge-in
         self._bargein_text_buffer = ""   # User's interruption text
+        self._bargein_start_time = 0.0   # When barge-in detection started
+        self._bargein_timeout_ms = 3000  # Max time to wait for words (3 seconds)
         self._current_ai_response = ""   # What AI is currently saying (for context)
         self._partial_ai_response = ""   # What AI was saying when interrupted
 
@@ -90,6 +92,7 @@ class VoiceAgent:
         self._setup_callbacks()
 
         logger.info(f"🎙️ VoiceAgent created (call_id={self.call_id})")
+        logger.info(f"   Interruption: enabled={self._enable_interruption}, words={self._interruption_words_required}, cooldown={self._bargein_cooldown_ms}ms")
 
     def _setup_callbacks(self):
         """Wire up internal callbacks between components"""
@@ -176,31 +179,56 @@ class VoiceAgent:
 
         # Handle barge-in (only if VAD available and interruption enabled)
         if self.state == AgentState.SPEAKING and self.vad and VADState and self._enable_interruption:
-            # Check cooldown - don't trigger barge-in right after TTS audio
-            # This prevents detecting the AI's own voice as user speech
-            time_since_tts = (time.time() - self._last_tts_audio_time) * 1000
-            if time_since_tts < self._bargein_cooldown_ms:
-                return  # Still in cooldown, ignore audio
-
-            # Check VAD for user speech during AI response
+            # Process VAD to detect user speech
             vad_event = self.vad.process(audio_chunk)
+
+            # Check for barge-in timeout
+            if self._bargein_detecting:
+                elapsed = (time.time() - self._bargein_start_time) * 1000
+                if elapsed > self._bargein_timeout_ms:
+                    logger.info(f"🎤 Barge-in timeout ({elapsed:.0f}ms) - cancelling detection")
+                    self._bargein_detecting = False
+                    self._bargein_word_count = 0
+                    self._bargein_text_buffer = ""
+
+            # Check for speech during AI response
             if vad_event and vad_event.state == VADState.SPEECH_START:
                 # Check energy threshold for barge-in (filter out echo/noise)
                 energy = getattr(vad_event, 'energy', 0) or 0
-                if energy < self._bargein_energy_threshold:
-                    logger.debug(f"Barge-in ignored: low energy ({energy:.4f} < {self._bargein_energy_threshold})")
-                    return  # Energy too low, likely echo
 
-                # Start barge-in detection - we'll wait for N words
+                # Only apply cooldown check on first speech detection
                 if not self._bargein_detecting:
+                    time_since_tts = (time.time() - self._last_tts_audio_time) * 1000
+                    if time_since_tts < self._bargein_cooldown_ms:
+                        logger.debug(f"Barge-in ignored: cooldown ({time_since_tts:.0f}ms < {self._bargein_cooldown_ms}ms)")
+                        return
+
+                    if energy < self._bargein_energy_threshold:
+                        logger.debug(f"Barge-in ignored: low energy ({energy:.4f} < {self._bargein_energy_threshold})")
+                        return
+
+                    # Start barge-in detection - we'll wait for N words
                     self._bargein_detecting = True
                     self._bargein_word_count = 0
                     self._bargein_text_buffer = ""
+                    self._bargein_start_time = time.time()
                     # Save what AI was saying when interruption started
                     self._partial_ai_response = self._current_ai_response
-                    logger.info(f"🎤 Barge-in detection started (need {self._interruption_words_required} words)")
+                    logger.info(f"🎤 Barge-in detection started (need {self._interruption_words_required} words, energy={energy:.4f})")
 
-            # If detecting barge-in, also send audio to STT to get user's words
+            # Check if user stopped speaking during barge-in detection
+            if self._bargein_detecting and vad_event and vad_event.state == VADState.SPEECH_END:
+                # User stopped speaking - if we have any words, trigger barge-in
+                if self._bargein_word_count > 0:
+                    logger.info(f"🎤 User stopped speaking during barge-in with {self._bargein_word_count} words")
+                    await self._handle_bargein(self._bargein_text_buffer)
+                    return
+                else:
+                    # No words detected, cancel detection
+                    logger.info(f"🎤 Barge-in cancelled - no words detected")
+                    self._bargein_detecting = False
+
+            # If detecting barge-in, send audio to STT to get user's words
             if self._bargein_detecting:
                 await self.stt.send_audio(audio_chunk)
             return
