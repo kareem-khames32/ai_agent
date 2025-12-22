@@ -29,6 +29,7 @@ class VADEvent:
     timestamp: float
     confidence: float
     speech_duration_ms: Optional[float] = None
+    energy: Optional[float] = None  # RMS energy level
 
 
 class VADProcessor:
@@ -157,7 +158,8 @@ class VADProcessor:
                 return VADEvent(
                     state=VADState.SPEECH_START,
                     timestamp=now,
-                    confidence=confidence
+                    confidence=confidence,
+                    energy=energy
                 )
 
         elif self.state == VADState.SPEECH_START:
@@ -172,7 +174,8 @@ class VADProcessor:
                         state=VADState.SPEAKING,
                         timestamp=now,
                         confidence=confidence,
-                        speech_duration_ms=speech_duration
+                        speech_duration_ms=speech_duration,
+                        energy=energy
                     )
             else:
                 # False positive, back to silence
@@ -204,7 +207,8 @@ class VADProcessor:
                             state=VADState.SPEECH_END,
                             timestamp=now,
                             confidence=confidence,
-                            speech_duration_ms=speech_duration
+                            speech_duration_ms=speech_duration,
+                            energy=energy
                         )
                         self.state = VADState.SILENCE
                         self.speech_start_time = None

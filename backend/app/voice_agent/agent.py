@@ -73,6 +73,8 @@ class VoiceAgent:
         self._response_task: Optional[asyncio.Task] = None
         self._llm_generating = False  # Track if LLM is still generating
         self._pending_tts_count = 0   # Track pending TTS sentences
+        self._last_tts_audio_time = 0.0  # Track when last TTS audio was sent
+        self._bargein_cooldown_ms = 500  # Cooldown after TTS before allowing barge-in
 
         # Wire up callbacks
         self._setup_callbacks()
@@ -164,9 +166,18 @@ class VoiceAgent:
 
         # Handle barge-in (only if VAD available)
         if self.state == AgentState.SPEAKING and self.vad and VADState:
+            # Check cooldown - don't trigger barge-in right after TTS audio
+            # This prevents detecting the AI's own voice as user speech
+            time_since_tts = (time.time() - self._last_tts_audio_time) * 1000
+            if time_since_tts < self._bargein_cooldown_ms:
+                return  # Still in cooldown, ignore audio
+
             # Check VAD for user speech during AI response
             vad_event = self.vad.process(audio_chunk)
             if vad_event and vad_event.state == VADState.SPEECH_START:
+                # Additional check: require higher energy for barge-in
+                if hasattr(vad_event, 'energy') and vad_event.energy < 0.05:
+                    return  # Energy too low, likely echo
                 await self._handle_bargein()
                 return
 
@@ -310,6 +321,9 @@ class VoiceAgent:
     async def _on_tts_audio(self, audio_chunk: bytes):
         """TTS generated audio chunk"""
         self.latency.mark("tts_first_byte")
+
+        # Track when TTS audio is sent (for barge-in cooldown)
+        self._last_tts_audio_time = time.time()
 
         if self.on_audio_output:
             await self.on_audio_output(audio_chunk)
