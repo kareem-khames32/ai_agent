@@ -229,7 +229,7 @@ class CartesiaTTS(TTSProvider):
 
 
 class AzureTTS(TTSProvider):
-    """Azure Cognitive Services TTS Provider"""
+    """Azure Cognitive Services TTS Provider with retry logic"""
 
     def __init__(self, config: VoiceAgentConfig):
         self.config = config
@@ -237,6 +237,8 @@ class AzureTTS(TTSProvider):
         self.region = config.tts_region or os.getenv("AZURE_TTS_REGION", "eastus")
         self.voice = config.tts_voice or "ar-SA-HamedNeural"
         self.client: Optional[httpx.AsyncClient] = None
+        self._max_retries = 3
+        self._backoff_base = 0.3  # 300ms base backoff
 
     async def initialize(self):
         """Initialize HTTP client"""
@@ -245,7 +247,8 @@ class AzureTTS(TTSProvider):
             return False
 
         self.client = httpx.AsyncClient(
-            timeout=30.0,
+            timeout=httpx.Timeout(30.0, connect=5.0),
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
             headers={
                 "Ocp-Apim-Subscription-Key": self.api_key,
                 "Content-Type": "application/ssml+xml",
@@ -256,32 +259,67 @@ class AzureTTS(TTSProvider):
         return True
 
     async def synthesize(self, text: str) -> AsyncGenerator[bytes, None]:
-        """Synthesize text to audio stream"""
+        """Synthesize text to audio stream with retry logic"""
         if not self.client:
             await self.initialize()
             if not self.client:
                 return
 
-        try:
-            url = f"https://{self.region}.tts.speech.microsoft.com/cognitiveservices/v1"
+        url = f"https://{self.region}.tts.speech.microsoft.com/cognitiveservices/v1"
 
-            ssml = f"""<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='ar-SA'>
-                <voice name='{self.voice}'>{text}</voice>
-            </speak>"""
+        ssml = f"""<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='ar-SA'>
+            <voice name='{self.voice}'>{text}</voice>
+        </speak>"""
 
-            response = await self.client.post(url, content=ssml)
-            if response.status_code == 200:
-                yield response.content
-            else:
-                logger.error(f"Azure TTS error: {response.status_code}")
+        for attempt in range(self._max_retries):
+            try:
+                response = await self.client.post(url, content=ssml)
 
-        except Exception as e:
-            logger.error(f"Azure TTS error: {e}")
+                if response.status_code == 200:
+                    yield response.content
+                    return  # Success
+
+                elif response.status_code == 429:
+                    # Rate limited - wait and retry
+                    if attempt < self._max_retries - 1:
+                        backoff = self._backoff_base * (2 ** attempt)
+                        logger.warning(f"Azure TTS rate limited (429), retry {attempt + 1}/{self._max_retries} in {backoff}s")
+                        await asyncio.sleep(backoff)
+                    else:
+                        logger.error(f"Azure TTS error: 429 (max retries reached)")
+                        return
+
+                elif response.status_code == 401:
+                    # Auth error - retry once
+                    if attempt < self._max_retries - 1:
+                        backoff = self._backoff_base * (2 ** attempt)
+                        logger.warning(f"Azure TTS auth error (401), retry {attempt + 1}/{self._max_retries} in {backoff}s")
+                        await asyncio.sleep(backoff)
+                    else:
+                        logger.error(f"Azure TTS error: 401 (max retries reached)")
+                        return
+
+                else:
+                    logger.error(f"Azure TTS error: {response.status_code}")
+                    return  # Non-retryable error
+
+            except httpx.TimeoutException:
+                if attempt < self._max_retries - 1:
+                    logger.warning(f"Azure TTS timeout, retry {attempt + 1}/{self._max_retries}")
+                    await asyncio.sleep(self._backoff_base)
+                else:
+                    logger.error("Azure TTS timeout (max retries reached)")
+                    return
+
+            except Exception as e:
+                logger.error(f"Azure TTS error: {e}")
+                return
 
     async def close(self):
         """Close provider"""
         if self.client:
             await self.client.aclose()
+            self.client = None
 
 
 class DeepgramTTS(TTSProvider):

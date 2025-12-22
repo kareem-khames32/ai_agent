@@ -294,7 +294,7 @@ class OpenAIWhisperSTT(STTProvider):
 
 
 class AzureWhisperSTT(STTProvider):
-    """Azure Speech-to-Text (batch mode)"""
+    """Azure Speech-to-Text (batch mode with retry logic)"""
 
     def __init__(self, config: VoiceAgentConfig):
         super().__init__(config)
@@ -305,6 +305,10 @@ class AzureWhisperSTT(STTProvider):
         self.min_buffer_ms = 1000
         self._last_final_text = ""
         self._processing = False
+        self._client: Optional[httpx.AsyncClient] = None
+        self._consecutive_errors = 0
+        self._max_retries = 3
+        self._backoff_base = 0.5  # 500ms base backoff
 
     async def connect(self) -> bool:
         self.api_key = self.config.stt_api_key or os.getenv("AZURE_SPEECH_KEY")
@@ -313,6 +317,12 @@ class AzureWhisperSTT(STTProvider):
         if not self.api_key:
             logger.error("Azure Speech API key not configured")
             return False
+
+        # Create shared client with connection pooling
+        self._client = httpx.AsyncClient(
+            timeout=httpx.Timeout(15.0, connect=5.0),
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5)
+        )
 
         self.is_connected = True
         logger.info(f"✅ Azure STT ready (region={self.region})")
@@ -346,43 +356,73 @@ class AzureWhisperSTT(STTProvider):
                 wav.setsampwidth(2)
                 wav.setframerate(16000)
                 wav.writeframes(audio_data)
-            wav_buffer.seek(0)
 
             # Get language code for Azure
             lang = self.config.stt_language or "ar-SA"
             if len(lang) == 2:
                 lang = f"{lang}-SA" if lang == "ar" else f"{lang}-US"
 
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"https://{self.region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1",
-                    headers={
-                        "Ocp-Apim-Subscription-Key": self.api_key,
-                        "Content-Type": "audio/wav; codecs=audio/pcm; samplerate=16000"
-                    },
-                    params={"language": lang},
-                    content=wav_buffer.read(),
-                    timeout=10.0
-                )
+            # Retry logic with exponential backoff
+            for attempt in range(self._max_retries):
+                try:
+                    wav_buffer.seek(0)
 
-                if response.status_code == 200:
-                    result = response.json()
-                    text = result.get("DisplayText", "").strip()
-                    if text:
-                        self._last_final_text = text
-                        event = TranscriptEvent(
-                            text=text,
-                            is_final=True,
-                            confidence=result.get("RecognitionStatus") == "Success",
-                            speech_final=True,
-                            start_time=0,
-                            duration=0
-                        )
-                        logger.info(f"📝 Azure STT: \"{text}\"")
-                        if self.on_transcript:
-                            await self.on_transcript(event)
-                else:
-                    logger.error(f"Azure STT error: {response.status_code}")
+                    if not self._client:
+                        self._client = httpx.AsyncClient(timeout=15.0)
+
+                    response = await self._client.post(
+                        f"https://{self.region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1",
+                        headers={
+                            "Ocp-Apim-Subscription-Key": self.api_key,
+                            "Content-Type": "audio/wav; codecs=audio/pcm; samplerate=16000"
+                        },
+                        params={"language": lang},
+                        content=wav_buffer.read()
+                    )
+
+                    if response.status_code == 200:
+                        self._consecutive_errors = 0
+                        result = response.json()
+                        text = result.get("DisplayText", "").strip()
+                        if text:
+                            self._last_final_text = text
+                            event = TranscriptEvent(
+                                text=text,
+                                is_final=True,
+                                confidence=result.get("RecognitionStatus") == "Success",
+                                speech_final=True,
+                                start_time=0,
+                                duration=0
+                            )
+                            logger.info(f"📝 Azure STT: \"{text}\"")
+                            if self.on_transcript:
+                                await self.on_transcript(event)
+                        break  # Success, exit retry loop
+
+                    elif response.status_code in (401, 429):
+                        self._consecutive_errors += 1
+                        if attempt < self._max_retries - 1:
+                            backoff = self._backoff_base * (2 ** attempt)
+                            logger.warning(f"Azure STT {response.status_code}, retry {attempt + 1}/{self._max_retries} in {backoff}s")
+                            await asyncio.sleep(backoff)
+                        else:
+                            logger.error(f"Azure STT error: {response.status_code} (max retries reached)")
+                    else:
+                        logger.error(f"Azure STT error: {response.status_code}")
+                        break  # Non-retryable error
+
+                except httpx.TimeoutException:
+                    if attempt < self._max_retries - 1:
+                        backoff = self._backoff_base * (2 ** attempt)
+                        logger.warning(f"Azure STT timeout, retry {attempt + 1}/{self._max_retries}")
+                        await asyncio.sleep(backoff)
+                    else:
+                        logger.error("Azure STT timeout (max retries reached)")
+
+                except Exception as e:
+                    logger.error(f"Azure STT request error: {e}")
+                    break
+
         except Exception as e:
             logger.error(f"Azure STT error: {e}")
         finally:
@@ -392,6 +432,9 @@ class AzureWhisperSTT(STTProvider):
         if len(self.audio_buffer) > 3200:
             await self._process_buffer()
         self.is_connected = False
+        if self._client:
+            await self._client.aclose()
+            self._client = None
 
     @property
     def last_final_text(self) -> str:
