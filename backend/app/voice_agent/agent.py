@@ -255,6 +255,14 @@ class VoiceAgent:
                 await self.stt.send_audio(audio_chunk)
             return
 
+        # Continue barge-in detection even if state changed to LISTENING
+        # This handles the case where TTS finished but we're still counting words
+        if self._bargein_detecting and self.state == AgentState.LISTENING:
+            logger.debug(f"Continuing barge-in detection in LISTENING state (words={self._bargein_word_count})")
+            # Send audio to STT to continue getting words
+            await self.stt.send_audio(audio_chunk)
+            return
+
         # Normal processing
         if self.state in (AgentState.LISTENING, AgentState.IDLE):
             # Process through VAD if available
@@ -351,10 +359,18 @@ class VoiceAgent:
     # VAD Callbacks
     def _on_vad_speech_start(self):
         """VAD detected speech start"""
+        # Don't trigger turn detection during SPEAKING state (barge-in mode)
+        if self.state == AgentState.SPEAKING:
+            logger.debug("VAD speech start ignored - in SPEAKING state (barge-in mode)")
+            return
         asyncio.create_task(self.turn_detector.on_speech_start())
 
     def _on_vad_speech_end(self, duration_ms: float):
         """VAD detected speech end"""
+        # Don't trigger turn detection during SPEAKING state (barge-in mode)
+        if self.state == AgentState.SPEAKING:
+            logger.debug("VAD speech end ignored - in SPEAKING state (barge-in mode)")
+            return
         self.latency.mark("speech_end")
         asyncio.create_task(self.turn_detector.on_speech_end())
 
@@ -512,6 +528,10 @@ class VoiceAgent:
         """Check if all speaking is complete and we can go back to listening"""
         if not self._llm_generating and self._pending_tts_count <= 0:
             if self.state == AgentState.SPEAKING:
+                # Don't change state if barge-in is being detected
+                if self._bargein_detecting:
+                    logger.debug("Speaking complete but waiting for barge-in detection")
+                    return
                 await self._set_state(AgentState.LISTENING)
 
     # Turn check loop
