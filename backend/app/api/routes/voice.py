@@ -300,6 +300,23 @@ async def voice_agent_websocket(
         logger.info(f"🔌 Voice WebSocket cleanup complete: {call_id}")
 
 
+def _get_api_key(credentials: Dict[str, Any], provider: str, env_var: str) -> Optional[str]:
+    """Get API key from nested credentials structure or environment"""
+    # Try nested structure: {"google": {"api_key": "..."}}
+    if provider in credentials:
+        provider_creds = credentials[provider]
+        if isinstance(provider_creds, dict):
+            return provider_creds.get("api_key") or provider_creds.get("key")
+
+    # Try flat structure: {"google_api_key": "..."}
+    flat_key = f"{provider}_api_key"
+    if flat_key in credentials:
+        return credentials[flat_key]
+
+    # Fall back to environment variable
+    return os.getenv(env_var)
+
+
 async def _create_realtime_agent(
     provider: str,
     model: str,
@@ -310,8 +327,10 @@ async def _create_realtime_agent(
 ) -> Optional[Union[OpenAIRealtimeAgent, GoogleGeminiLiveAgent, GroqFastAgent]]:
     """Create the appropriate realtime agent based on provider"""
 
+    logger.debug(f"Creating realtime agent: provider={provider}, credentials_keys={list(credentials.keys())}")
+
     if provider == "openai":
-        api_key = credentials.get("openai_api_key") or os.getenv("OPENAI_API_KEY")
+        api_key = _get_api_key(credentials, "openai", "OPENAI_API_KEY")
         if not api_key:
             logger.error("OpenAI API key not found")
             return None
@@ -325,11 +344,12 @@ async def _create_realtime_agent(
         )
 
     elif provider == "google":
-        api_key = credentials.get("google_api_key") or os.getenv("GOOGLE_API_KEY")
+        api_key = _get_api_key(credentials, "google", "GOOGLE_API_KEY")
         if not api_key:
             logger.error("Google API key not found")
             return None
 
+        logger.info(f"🔗 Creating Google Gemini Live agent with key: {api_key[:10]}...")
         return GoogleGeminiLiveAgent(
             api_key=api_key,
             model=model or "gemini-2.0-flash-exp",
@@ -339,13 +359,13 @@ async def _create_realtime_agent(
         )
 
     elif provider == "groq":
-        api_key = credentials.get("groq_api_key") or os.getenv("GROQ_API_KEY")
+        api_key = _get_api_key(credentials, "groq", "GROQ_API_KEY")
         if not api_key:
             logger.error("Groq API key not found")
             return None
 
         # Groq needs a TTS provider for audio output
-        tts_api_key = credentials.get("openai_api_key") or os.getenv("OPENAI_API_KEY")
+        tts_api_key = _get_api_key(credentials, "openai", "OPENAI_API_KEY")
 
         return GroqFastAgent(
             api_key=api_key,
