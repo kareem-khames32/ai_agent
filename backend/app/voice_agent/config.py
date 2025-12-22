@@ -27,6 +27,11 @@ class VoiceAgentConfig:
     turn_max_wait_ms: int = 2000        # Max wait before forcing turn
     punctuation_reduces_silence: bool = True
 
+    # Barge-in (Interruption) Settings
+    enable_interruption: bool = True    # Allow customer to interrupt
+    interruption_words: int = 2         # Words required to trigger interruption
+    interruption_cooldown_ms: int = 300 # Cooldown after TTS to prevent echo
+
     # STT Settings
     stt_provider: str = "deepgram"
     stt_api_key: Optional[str] = None   # Will use env if None
@@ -202,5 +207,12 @@ def create_config_from_assistant(
     transcriber_settings = assistant.get("transcriber_settings", {})
     if transcriber_settings.get("endpointing_ms"):
         config.stt_endpointing_ms = transcriber_settings["endpointing_ms"]
+
+    # Barge-in (Interruption) settings
+    stop_speaking_plan = assistant.get("stop_speaking_plan", {})
+    if "enable_interruption" in stop_speaking_plan:
+        config.enable_interruption = stop_speaking_plan["enable_interruption"]
+    if "interruption_words" in stop_speaking_plan:
+        config.interruption_words = stop_speaking_plan["interruption_words"]
 
     return config

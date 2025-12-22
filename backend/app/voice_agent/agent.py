@@ -74,8 +74,17 @@ class VoiceAgent:
         self._llm_generating = False  # Track if LLM is still generating
         self._pending_tts_count = 0   # Track pending TTS sentences
         self._last_tts_audio_time = 0.0  # Track when last TTS audio was sent
-        self._bargein_cooldown_ms = 300  # Reduced cooldown for responsiveness
+        self._bargein_cooldown_ms = config.interruption_cooldown_ms
         self._bargein_energy_threshold = 0.03  # Lower threshold for barge-in
+
+        # Barge-in (Interruption) tracking
+        self._enable_interruption = config.enable_interruption
+        self._interruption_words_required = config.interruption_words
+        self._bargein_detecting = False  # Currently detecting barge-in
+        self._bargein_word_count = 0     # Words detected during barge-in
+        self._bargein_text_buffer = ""   # User's interruption text
+        self._current_ai_response = ""   # What AI is currently saying (for context)
+        self._partial_ai_response = ""   # What AI was saying when interrupted
 
         # Wire up callbacks
         self._setup_callbacks()
@@ -165,8 +174,8 @@ class VoiceAgent:
         if not self._is_running:
             return
 
-        # Handle barge-in (only if VAD available)
-        if self.state == AgentState.SPEAKING and self.vad and VADState:
+        # Handle barge-in (only if VAD available and interruption enabled)
+        if self.state == AgentState.SPEAKING and self.vad and VADState and self._enable_interruption:
             # Check cooldown - don't trigger barge-in right after TTS audio
             # This prevents detecting the AI's own voice as user speech
             time_since_tts = (time.time() - self._last_tts_audio_time) * 1000
@@ -181,9 +190,20 @@ class VoiceAgent:
                 if energy < self._bargein_energy_threshold:
                     logger.debug(f"Barge-in ignored: low energy ({energy:.4f} < {self._bargein_energy_threshold})")
                     return  # Energy too low, likely echo
-                logger.info(f"🎤 Barge-in triggered (energy={energy:.4f})")
-                await self._handle_bargein()
-                return
+
+                # Start barge-in detection - we'll wait for N words
+                if not self._bargein_detecting:
+                    self._bargein_detecting = True
+                    self._bargein_word_count = 0
+                    self._bargein_text_buffer = ""
+                    # Save what AI was saying when interruption started
+                    self._partial_ai_response = self._current_ai_response
+                    logger.info(f"🎤 Barge-in detection started (need {self._interruption_words_required} words)")
+
+            # If detecting barge-in, also send audio to STT to get user's words
+            if self._bargein_detecting:
+                await self.stt.send_audio(audio_chunk)
+            return
 
         # Normal processing
         if self.state in (AgentState.LISTENING, AgentState.IDLE):
@@ -194,10 +214,18 @@ class VoiceAgent:
             # Send to STT (it needs continuous audio)
             await self.stt.send_audio(audio_chunk)
 
-    async def _handle_bargein(self):
-        """Handle user barge-in during AI response"""
+    async def _handle_bargein(self, user_interruption: str = ""):
+        """
+        Handle user barge-in during AI response.
+
+        Instead of just stopping and going to next step, we:
+        1. Save what AI was saying (partial response)
+        2. Stop TTS
+        3. Process user's interruption WITH context of what AI was saying
+        """
         self.latency.mark("bargein_detected")
-        logger.info("⚠️ BARGE-IN detected!")
+        logger.info(f"⚠️ BARGE-IN confirmed! User said: \"{user_interruption}\"")
+        logger.info(f"   AI was saying: \"{self._partial_ai_response[:100]}...\"")
 
         # Cancel LLM generation
         self.llm.cancel()
@@ -208,11 +236,57 @@ class VoiceAgent:
         self.tts.clear_queue()
         self._pending_tts_count = 0
 
-        # Reset state
-        await self._set_state(AgentState.LISTENING)
+        # Reset barge-in detection state
+        self._bargein_detecting = False
+        self._bargein_word_count = 0
+
+        # Reset turn detector for new turn
+        self.turn_detector.reset()
+
+        # Set state to processing - we'll respond to the interruption
+        await self._set_state(AgentState.PROCESSING)
 
         self.latency.mark("bargein_handled")
         self.latency.measure("bargein_detected", "bargein_handled")
+
+        # Generate response with interruption context
+        # This helps the AI acknowledge what it was saying and respond naturally
+        self._response_task = asyncio.create_task(
+            self._generate_interruption_response(user_interruption, self._partial_ai_response)
+        )
+
+    async def _generate_interruption_response(self, user_text: str, ai_partial_response: str):
+        """
+        Generate response to user's interruption with context.
+
+        The LLM will know what it was saying when interrupted, so it can:
+        - Acknowledge the interruption naturally
+        - Not repeat what it already said
+        - Respond to user's actual question/comment
+        """
+        self._llm_generating = True
+        self._pending_tts_count = 0
+        self._current_ai_response = ""
+
+        try:
+            # Add context about the interruption to the conversation
+            # This helps the AI respond naturally
+            interruption_context = f"[العميل قاطعني وأنا كنت بقول: \"{ai_partial_response[:150]}...\"] العميل قال: {user_text}"
+
+            logger.info(f"🎯 Processing interruption with context")
+
+            first_sentence = True
+            async for token in self.llm.generate_stream(interruption_context):
+                if first_sentence and self.llm.is_generating:
+                    first_sentence = False
+
+        except asyncio.CancelledError:
+            logger.debug("Interruption response cancelled")
+        except Exception as e:
+            logger.error(f"Interruption response error: {e}")
+        finally:
+            self._llm_generating = False
+            await self._check_speaking_complete()
 
     async def _set_state(self, new_state: AgentState):
         """Set agent state"""
@@ -246,12 +320,33 @@ class VoiceAgent:
         if event.is_final:
             self.latency.mark("stt_final")
 
-        # Buffer text in turn detector (is_final/speech_final are IGNORED!)
-        await self.turn_detector.on_transcript(
-            event.text,
-            event.is_final,
-            event.speech_final
-        )
+        # Handle barge-in word counting during detection
+        if self._bargein_detecting and self.state == AgentState.SPEAKING:
+            if event.text and event.text.strip():
+                # Count words in the transcript
+                words = event.text.strip().split()
+                word_count = len(words)
+
+                # Update barge-in buffer
+                self._bargein_text_buffer = event.text.strip()
+                self._bargein_word_count = word_count
+
+                logger.debug(f"🎤 Barge-in words: {word_count}/{self._interruption_words_required} - \"{event.text}\"")
+
+                # Check if we have enough words to confirm barge-in
+                if word_count >= self._interruption_words_required:
+                    logger.info(f"🎤 Barge-in confirmed with {word_count} words!")
+                    await self._handle_bargein(self._bargein_text_buffer)
+                    return
+
+        # Normal transcript handling (when not in barge-in detection)
+        if self.state in (AgentState.LISTENING, AgentState.IDLE):
+            # Buffer text in turn detector (is_final/speech_final are IGNORED!)
+            await self.turn_detector.on_transcript(
+                event.text,
+                event.is_final,
+                event.speech_final
+            )
 
         # Notify external callback
         if self.on_transcript:
@@ -318,6 +413,11 @@ class VoiceAgent:
             self.latency.mark("llm_first_token")
             await self._set_state(AgentState.SPEAKING)
             self.latency.mark("tts_start")
+            # Reset AI response tracking for new response
+            self._current_ai_response = ""
+
+        # Track what AI is saying (for barge-in context)
+        self._current_ai_response += sentence + " "
 
         # Track pending TTS
         self._pending_tts_count += 1
