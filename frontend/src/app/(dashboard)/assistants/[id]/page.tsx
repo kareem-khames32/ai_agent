@@ -38,6 +38,69 @@ const modelProviders = [
   { value: "together", label: "Together AI (200+ models)" },
 ];
 
+// ============== VOICE MODES ==============
+const voiceModes = [
+  { value: "pipeline", label: "Pipeline (STT → LLM → TTS)", description: "Traditional mode with separate components" },
+  { value: "realtime", label: "Realtime API (Native Voice)", description: "Direct speech-to-speech, lowest latency" },
+];
+
+// ============== REALTIME PROVIDERS ==============
+const realtimeProviders = [
+  { value: "openai", label: "OpenAI Realtime", description: "gpt-4o-realtime - Native audio I/O" },
+  { value: "google", label: "Google Gemini Live", description: "gemini-2.0-flash - Multimodal live" },
+  { value: "groq", label: "Groq Ultra-Fast", description: "Fastest LLM inference + STT/TTS" },
+  { value: "elevenlabs", label: "ElevenLabs Conversational", description: "Best voice quality, conversational AI" },
+];
+
+// Realtime models by provider
+const realtimeModelsByProvider: Record<string, { value: string; label: string; description: string }[]> = {
+  openai: [
+    { value: "gpt-4o-realtime-preview", label: "GPT-4o Realtime Preview", description: "Audio in/out, function calling" },
+    { value: "gpt-4o-realtime-preview-2024-12-17", label: "GPT-4o Realtime (Dec 2024)", description: "Latest stable version" },
+    { value: "gpt-4o-mini-realtime-preview", label: "GPT-4o Mini Realtime", description: "Faster, cheaper option" },
+  ],
+  google: [
+    { value: "gemini-2.0-flash-exp", label: "Gemini 2.0 Flash (Live)", description: "Multimodal live streaming" },
+    { value: "gemini-2.0-flash-thinking-exp", label: "Gemini 2.0 Flash Thinking", description: "With reasoning" },
+  ],
+  groq: [
+    { value: "llama-3.3-70b-versatile", label: "Llama 3.3 70B", description: "Best quality, 275 tok/s" },
+    { value: "llama-3.1-8b-instant", label: "Llama 3.1 8B Instant", description: "Ultra fast, 750 tok/s" },
+    { value: "mixtral-8x7b-32768", label: "Mixtral 8x7B", description: "Great for Arabic" },
+  ],
+  elevenlabs: [
+    { value: "eleven_turbo_v2_5", label: "Turbo v2.5", description: "Lowest latency" },
+    { value: "eleven_multilingual_v2", label: "Multilingual v2", description: "Best for Arabic" },
+  ],
+};
+
+// Realtime voices by provider
+const realtimeVoicesByProvider: Record<string, { value: string; label: string }[]> = {
+  openai: [
+    { value: "alloy", label: "Alloy (محايد)" },
+    { value: "echo", label: "Echo (ذكر واضح)" },
+    { value: "shimmer", label: "Shimmer (أنثى دافئ)" },
+    { value: "ash", label: "Ash (جديد)" },
+    { value: "ballad", label: "Ballad (جديد)" },
+    { value: "coral", label: "Coral (جديد)" },
+    { value: "sage", label: "Sage (جديد)" },
+    { value: "verse", label: "Verse (جديد)" },
+  ],
+  google: [
+    { value: "Puck", label: "Puck (Default)" },
+    { value: "Charon", label: "Charon" },
+    { value: "Kore", label: "Kore" },
+    { value: "Fenrir", label: "Fenrir" },
+    { value: "Aoede", label: "Aoede" },
+  ],
+  groq: [], // Uses separate TTS
+  elevenlabs: [
+    { value: "EXAVITQu4vr4xnSDxMaL", label: "Bella (عربي)" },
+    { value: "21m00Tcm4TlvDq8ikWAM", label: "Rachel (محادثة)" },
+    { value: "pNInz6obpgDQGcFmaJgB", label: "Adam (ذكر)" },
+  ],
+};
+
 const modelsByProvider: Record<string, { value: string; label: string; price?: string; context?: string }[]> = {
   openai: [
     { value: "gpt-4o", label: "GPT-4o", price: "$2.50/$10 per 1M", context: "128K" },
@@ -465,6 +528,11 @@ export default function AssistantEditorPage() {
     // Interruption settings
     interruptionEnabled: true,
     interruptionWordsThreshold: 0,  // 0 = immediate, up to 10 words
+    // Voice Mode settings
+    voiceMode: "pipeline" as "pipeline" | "realtime",  // pipeline or realtime
+    realtimeProvider: "openai",
+    realtimeModel: "gpt-4o-realtime-preview",
+    realtimeVoice: "alloy",
   });
 
   const updateFormData = (field: string, value: unknown) => {
@@ -644,6 +712,11 @@ export default function AssistantEditorPage() {
           enable_interruption: formData.interruptionEnabled,
           interruption_words: formData.interruptionWordsThreshold,
         },
+        // Voice Mode settings
+        voice_mode: formData.voiceMode,
+        realtime_provider: formData.realtimeProvider,
+        realtime_model: formData.realtimeModel,
+        realtime_voice: formData.realtimeVoice,
       }));
 
       console.log("✅ Assistant saved:", assistantId);
@@ -699,6 +772,11 @@ export default function AssistantEditorPage() {
                   enable_interruption: formData.interruptionEnabled,
                   interruption_words: formData.interruptionWordsThreshold,
                 },
+                // Voice Mode settings
+                voice_mode: formData.voiceMode,
+                realtime_provider: formData.realtimeProvider,
+                realtime_model: formData.realtimeModel,
+                realtime_voice: formData.realtimeVoice,
               }));
               router.push(`/live-call?assistant=${params.id}`);
             }}
@@ -870,6 +948,119 @@ export default function AssistantEditorPage() {
 
         {/* Voice Tab */}
         <TabsContent value="voice">
+          {/* Voice Mode Selector */}
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle>🎙️ Voice Mode</CardTitle>
+              <CardDescription>Choose how voice processing works</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 gap-4">
+                {voiceModes.map((mode) => (
+                  <div
+                    key={mode.value}
+                    onClick={() => updateFormData("voiceMode", mode.value)}
+                    className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
+                      formData.voiceMode === mode.value
+                        ? "border-primary bg-primary/5"
+                        : "border-border hover:border-primary/50"
+                    }`}
+                  >
+                    <div className="font-semibold">{mode.label}</div>
+                    <div className="text-sm text-muted-foreground mt-1">{mode.description}</div>
+                    {mode.value === "realtime" && (
+                      <Badge className="mt-2" variant="secondary">⚡ Lowest Latency</Badge>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Realtime Mode Settings */}
+          {formData.voiceMode === "realtime" && (
+            <Card className="mb-6">
+              <CardHeader>
+                <CardTitle>⚡ Realtime Provider</CardTitle>
+                <CardDescription>Direct speech-to-speech with native voice support</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  {realtimeProviders.map((provider) => (
+                    <div
+                      key={provider.value}
+                      onClick={() => {
+                        updateFormData("realtimeProvider", provider.value);
+                        // Auto-select first model
+                        const models = realtimeModelsByProvider[provider.value] || [];
+                        if (models.length > 0) {
+                          updateFormData("realtimeModel", models[0].value);
+                        }
+                        // Auto-select first voice
+                        const voices = realtimeVoicesByProvider[provider.value] || [];
+                        if (voices.length > 0) {
+                          updateFormData("realtimeVoice", voices[0].value);
+                        }
+                      }}
+                      className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
+                        formData.realtimeProvider === provider.value
+                          ? "border-primary bg-primary/5"
+                          : "border-border hover:border-primary/50"
+                      }`}
+                    >
+                      <div className="font-semibold">{provider.label}</div>
+                      <div className="text-sm text-muted-foreground">{provider.description}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-2 gap-4 mt-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Model</label>
+                    <Select
+                      value={formData.realtimeModel}
+                      onChange={(v) => updateFormData("realtimeModel", v)}
+                      options={(realtimeModelsByProvider[formData.realtimeProvider] || []).map(m => ({
+                        value: m.value,
+                        label: m.label,
+                      }))}
+                    />
+                    {(() => {
+                      const model = (realtimeModelsByProvider[formData.realtimeProvider] || []).find(m => m.value === formData.realtimeModel);
+                      return model ? (
+                        <div className="text-xs text-muted-foreground">{model.description}</div>
+                      ) : null;
+                    })()}
+                  </div>
+
+                  {(realtimeVoicesByProvider[formData.realtimeProvider] || []).length > 0 && (
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Voice</label>
+                      <Select
+                        value={formData.realtimeVoice}
+                        onChange={(v) => updateFormData("realtimeVoice", v)}
+                        options={(realtimeVoicesByProvider[formData.realtimeProvider] || []).map(v => ({
+                          value: v.value,
+                          label: v.label,
+                        }))}
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {formData.realtimeProvider === "groq" && (
+                  <div className="p-3 bg-yellow-500/10 rounded-lg border border-yellow-500/20">
+                    <div className="text-sm text-yellow-600 dark:text-yellow-400">
+                      ⚠️ Groq uses ultra-fast LLM inference with separate STT/TTS. Configure voice below.
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Pipeline Mode Settings OR Groq TTS Settings */}
+          {(formData.voiceMode === "pipeline" || formData.realtimeProvider === "groq") && (
           <div className="grid gap-6 md:grid-cols-2">
             <Card>
               <CardHeader>
@@ -974,6 +1165,7 @@ export default function AssistantEditorPage() {
               </CardContent>
             </Card>
           </div>
+          )}
         </TabsContent>
 
         {/* Transcriber Tab */}

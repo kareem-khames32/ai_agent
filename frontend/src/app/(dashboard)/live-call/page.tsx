@@ -152,6 +152,11 @@ export default function LiveCallPage() {
                 enable_interruption: true,
                 interruption_words: 2,
               },
+              // Load voice mode settings
+              voice_mode: testAssistant.voice_mode || "pipeline",
+              realtime_provider: testAssistant.realtime_provider || "openai",
+              realtime_model: testAssistant.realtime_model || "gpt-4o-realtime-preview",
+              realtime_voice: testAssistant.realtime_voice || "alloy",
             };
 
             // Add to assistants list if not already there
@@ -272,6 +277,11 @@ export default function LiveCallPage() {
                 enable_interruption: true,
                 interruption_words: 2,
               },
+              // Voice mode settings
+              voice_mode: selectedAssistant.voice_mode || "pipeline",
+              realtime_provider: selectedAssistant.realtime_provider || "openai",
+              realtime_model: selectedAssistant.realtime_model || "gpt-4o-realtime-preview",
+              realtime_voice: selectedAssistant.realtime_voice || "alloy",
             },
             credentials: credentials,
           })

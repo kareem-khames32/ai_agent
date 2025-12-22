@@ -1,13 +1,13 @@
 """
 Voice API routes - WebSocket for real-time audio streaming
-Using new VoiceAgent pipeline with smart turn detection
+Supports both Pipeline mode (STT→LLM→TTS) and Realtime API mode
 """
 import asyncio
 import base64
 import json
 import time
 import os
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Union
 from uuid import uuid4
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends, Query
 from fastapi.responses import Response
@@ -15,6 +15,7 @@ from starlette.websockets import WebSocketState
 from loguru import logger
 
 from app.voice_agent import VoiceAgent, VoiceAgentConfig, get_config, create_config_from_assistant, AgentState
+from app.voice_agent.realtime import OpenAIRealtimeAgent, GoogleGeminiLiveAgent, GroqFastAgent
 
 router = APIRouter()
 
@@ -29,19 +30,22 @@ async def voice_agent_websocket(
     assistant_id: Optional[str] = Query(None)
 ):
     """
-    WebSocket endpoint for real-time voice conversation using VoiceAgent
+    WebSocket endpoint for real-time voice conversation
+
+    Supports two modes:
+    1. Pipeline mode (default): STT → LLM → TTS with smart turn detection
+    2. Realtime mode: Native speech-to-speech APIs (OpenAI, Google, Groq)
 
     Protocol:
     Client sends:
-    - {"type": "config", "system_prompt": "...", "assistant_id": "..."}
+    - {"type": "config", "voice_mode": "pipeline|realtime", "realtime_provider": "openai|google|groq", ...}
     - {"type": "audio", "data": "<base64 PCM 16kHz mono>"}
     - {"type": "stop"} - End conversation
 
     Server sends:
-    - {"type": "ready", "call_id": "..."} - Agent ready
-    - {"type": "audio", "data": "<base64 PCM 24kHz mono>"} - Audio output
-    - {"type": "transcript", "text": "...", "is_final": true/false} - User speech
-    - {"type": "response", "text": "..."} - AI response text
+    - {"type": "ready", "call_id": "...", "mode": "pipeline|realtime"} - Agent ready
+    - {"type": "audio", "data": "<base64 PCM>"} - Audio output
+    - {"type": "transcript", "text": "...", "role": "user|assistant"} - Transcripts
     - {"type": "state", "state": "listening|processing|speaking"}
     - {"type": "error", "message": "..."} - Error message
     """
@@ -50,9 +54,9 @@ async def voice_agent_websocket(
     active_connections[call_id] = websocket
     logger.info(f"🔌 Voice WebSocket connected: {call_id}")
 
-    config: Optional[VoiceAgentConfig] = None
-    agent: Optional[VoiceAgent] = None
     is_connected = True
+    voice_mode = "pipeline"
+    agent: Optional[Union[VoiceAgent, OpenAIRealtimeAgent, GoogleGeminiLiveAgent, GroqFastAgent]] = None
 
     async def send_audio(audio_chunk: bytes):
         """Send audio to client"""
@@ -67,15 +71,30 @@ async def voice_agent_websocket(
         except Exception as e:
             logger.error(f"Send audio error: {e}")
 
-    async def send_transcript(text: str, is_final: bool):
-        """Send transcript to client"""
+    async def send_transcript_pipeline(text: str, is_final: bool):
+        """Send transcript to client (pipeline mode)"""
         if not is_connected:
             return
         try:
             await websocket.send_json({
                 "type": "transcript",
                 "text": text,
-                "is_final": is_final
+                "is_final": is_final,
+                "role": "user"
+            })
+        except Exception as e:
+            logger.error(f"Send transcript error: {e}")
+
+    async def send_transcript_realtime(text: str, role: str):
+        """Send transcript to client (realtime mode)"""
+        if not is_connected:
+            return
+        try:
+            await websocket.send_json({
+                "type": "transcript",
+                "text": text,
+                "role": role,
+                "is_final": True
             })
         except Exception as e:
             logger.error(f"Send transcript error: {e}")
@@ -92,14 +111,15 @@ async def voice_agent_websocket(
         except Exception as e:
             logger.error(f"Send response error: {e}")
 
-    async def send_state(state: AgentState):
+    async def send_state(state):
         """Send state change to client"""
         if not is_connected:
             return
         try:
+            state_value = state.value if hasattr(state, 'value') else str(state)
             await websocket.send_json({
                 "type": "state",
-                "state": state.value
+                "state": state_value
             })
         except Exception as e:
             logger.error(f"Send state error: {e}")
@@ -121,47 +141,90 @@ async def voice_agent_websocket(
                     assistant_data = data.get("assistant")
                     credentials = data.get("credentials", {})
 
-                    # Create config from assistant if provided
+                    # Check voice mode
+                    voice_mode = data.get("voice_mode", "pipeline")
                     if assistant_data:
-                        config = create_config_from_assistant(assistant_data, credentials)
-                        logger.info(f"📋 Config from assistant: LLM={config.llm_provider}/{config.llm_model}, TTS={config.tts_provider}, STT={config.stt_provider}")
-                        logger.info(f"📋 Stop Speaking Plan: enable_interruption={config.enable_interruption}, interruption_words={config.interruption_words}")
-                        # Log the raw assistant data for debugging
-                        stop_plan = assistant_data.get("stop_speaking_plan", {})
-                        logger.debug(f"📋 Raw stop_speaking_plan from frontend: {stop_plan}")
+                        voice_mode = assistant_data.get("voice_mode", "pipeline")
+
+                    logger.info(f"📋 Voice mode: {voice_mode}")
+
+                    if voice_mode == "realtime":
+                        # Realtime mode - use native APIs
+                        realtime_provider = assistant_data.get("realtime_provider", "openai") if assistant_data else "openai"
+                        realtime_model = assistant_data.get("realtime_model", "") if assistant_data else ""
+                        realtime_voice = assistant_data.get("realtime_voice", "alloy") if assistant_data else "alloy"
+
+                        agent = await _create_realtime_agent(
+                            provider=realtime_provider,
+                            model=realtime_model,
+                            voice=realtime_voice,
+                            system_prompt=system_prompt,
+                            credentials=credentials,
+                            call_id=call_id
+                        )
+
+                        if agent:
+                            # Set up realtime callbacks
+                            agent.on_audio_output = send_audio
+                            agent.on_transcript = send_transcript_realtime
+                            agent.on_state_change = send_state
+                            agent.on_error = lambda msg: websocket.send_json({"type": "error", "message": msg})
+
+                            # Connect to realtime API
+                            connected = await agent.connect()
+                            if not connected:
+                                raise Exception(f"Failed to connect to {realtime_provider} Realtime API")
+
+                            logger.info(f"🎙️ Realtime agent ready: {realtime_provider}")
+                        else:
+                            raise Exception(f"Failed to create realtime agent for {realtime_provider}")
+
                     else:
-                        config = get_config()
-                        logger.info(f"📋 Using default config")
+                        # Pipeline mode - use VoiceAgent
+                        if assistant_data:
+                            config = create_config_from_assistant(assistant_data, credentials)
+                            logger.info(f"📋 Config from assistant: LLM={config.llm_provider}/{config.llm_model}, TTS={config.tts_provider}, STT={config.stt_provider}")
+                        else:
+                            config = get_config()
+                            logger.info(f"📋 Using default config")
+
+                        agent = VoiceAgent(config, call_id)
+                        agent.on_audio_output = send_audio
+                        agent.on_transcript = send_transcript_pipeline
+                        agent.on_response = send_response
+                        agent.on_state_change = send_state
+
+                        await agent.start(system_prompt)
 
                     config_received = True
 
                 elif data.get("type") == "audio":
-                    # Audio before config, start with default
+                    # Audio before config, start with default pipeline
                     config = get_config()
+                    agent = VoiceAgent(config, call_id)
+                    agent.on_audio_output = send_audio
+                    agent.on_transcript = send_transcript_pipeline
+                    agent.on_response = send_response
+                    agent.on_state_change = send_state
+                    await agent.start()
                     config_received = True
-                    # Process this audio chunk after starting
 
             except asyncio.TimeoutError:
-                logger.warning("Config timeout, using defaults")
+                logger.warning("Config timeout, using default pipeline")
                 config = get_config()
+                agent = VoiceAgent(config, call_id)
+                agent.on_audio_output = send_audio
+                agent.on_transcript = send_transcript_pipeline
+                agent.on_response = send_response
+                agent.on_state_change = send_state
+                await agent.start()
                 config_received = True
-
-        # Create agent with config
-        agent = VoiceAgent(config, call_id)
-
-        # Set up callbacks
-        agent.on_audio_output = send_audio
-        agent.on_transcript = send_transcript
-        agent.on_response = send_response
-        agent.on_state_change = send_state
-
-        # Start agent
-        await agent.start(system_prompt)
 
         # Send ready message
         await websocket.send_json({
             "type": "ready",
-            "call_id": call_id
+            "call_id": call_id,
+            "mode": voice_mode
         })
 
         # Main message loop
@@ -176,9 +239,17 @@ async def voice_agent_websocket(
 
                 if msg_type == "audio":
                     audio_b64 = data.get("data")
-                    if audio_b64:
+                    if audio_b64 and agent:
                         audio_bytes = base64.b64decode(audio_b64)
-                        await agent.process_audio(audio_bytes)
+                        if voice_mode == "realtime":
+                            await agent.send_audio(audio_bytes)
+                        else:
+                            await agent.process_audio(audio_bytes)
+
+                elif msg_type == "interrupt":
+                    # Barge-in / interrupt
+                    if agent and hasattr(agent, 'interrupt'):
+                        await agent.interrupt()
 
                 elif msg_type == "stop":
                     logger.info(f"Stop requested: {call_id}")
@@ -188,7 +259,6 @@ async def voice_agent_websocket(
                     await websocket.send_json({"type": "pong"})
 
             except asyncio.TimeoutError:
-                # Send keepalive
                 await websocket.send_json({"type": "ping"})
             except WebSocketDisconnect:
                 raise
@@ -213,7 +283,10 @@ async def voice_agent_websocket(
         is_connected = False
 
         if agent:
-            await agent.stop()
+            if hasattr(agent, 'stop'):
+                await agent.stop()
+            elif hasattr(agent, 'close'):
+                await agent.close()
 
         if call_id in active_connections:
             del active_connections[call_id]
@@ -225,6 +298,68 @@ async def voice_agent_websocket(
             pass
 
         logger.info(f"🔌 Voice WebSocket cleanup complete: {call_id}")
+
+
+async def _create_realtime_agent(
+    provider: str,
+    model: str,
+    voice: str,
+    system_prompt: str,
+    credentials: Dict[str, Any],
+    call_id: str
+) -> Optional[Union[OpenAIRealtimeAgent, GoogleGeminiLiveAgent, GroqFastAgent]]:
+    """Create the appropriate realtime agent based on provider"""
+
+    if provider == "openai":
+        api_key = credentials.get("openai_api_key") or os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            logger.error("OpenAI API key not found")
+            return None
+
+        return OpenAIRealtimeAgent(
+            api_key=api_key,
+            model=model or "gpt-4o-realtime-preview-2024-12-17",
+            voice=voice or "alloy",
+            system_prompt=system_prompt,
+            call_id=call_id
+        )
+
+    elif provider == "google":
+        api_key = credentials.get("google_api_key") or os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            logger.error("Google API key not found")
+            return None
+
+        return GoogleGeminiLiveAgent(
+            api_key=api_key,
+            model=model or "gemini-2.0-flash-exp",
+            voice=voice or "Aoede",
+            system_prompt=system_prompt,
+            call_id=call_id
+        )
+
+    elif provider == "groq":
+        api_key = credentials.get("groq_api_key") or os.getenv("GROQ_API_KEY")
+        if not api_key:
+            logger.error("Groq API key not found")
+            return None
+
+        # Groq needs a TTS provider for audio output
+        tts_api_key = credentials.get("openai_api_key") or os.getenv("OPENAI_API_KEY")
+
+        return GroqFastAgent(
+            api_key=api_key,
+            model=model or "llama-3.3-70b-versatile",
+            voice=voice or "alloy",
+            system_prompt=system_prompt,
+            call_id=call_id,
+            tts_provider="openai",
+            tts_api_key=tts_api_key
+        )
+
+    else:
+        logger.error(f"Unknown realtime provider: {provider}")
+        return None
 
 
 @router.websocket("/ws/{call_id}")
