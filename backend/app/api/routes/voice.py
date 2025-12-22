@@ -16,6 +16,7 @@ from loguru import logger
 
 from app.voice_agent import VoiceAgent, VoiceAgentConfig, get_config, create_config_from_assistant, AgentState
 from app.voice_agent.realtime import OpenAIRealtimeAgent, GoogleGeminiLiveAgent, GroqFastAgent
+from app.voice_agent.call_recorder import CallRecorder, call_log_storage
 
 router = APIRouter()
 
@@ -58,11 +59,17 @@ async def voice_agent_websocket(
     voice_mode = "pipeline"
     agent: Optional[Union[VoiceAgent, OpenAIRealtimeAgent, GoogleGeminiLiveAgent, GroqFastAgent]] = None
 
+    # Initialize call recorder
+    recorder = CallRecorder(call_id)
+
     async def send_audio(audio_chunk: bytes):
-        """Send audio to client"""
+        """Send audio to client and record"""
         if not is_connected:
             return
         try:
+            # Record assistant audio
+            recorder.record_assistant_audio(audio_chunk)
+
             audio_b64 = base64.b64encode(audio_chunk).decode('utf-8')
             await websocket.send_json({
                 "type": "audio",
@@ -76,6 +83,11 @@ async def voice_agent_websocket(
         if not is_connected:
             return
         try:
+            # Record transcript
+            if is_final:
+                recorder.add_transcript(text, "user", is_final)
+                recorder.mark_user_speech_end()
+
             await websocket.send_json({
                 "type": "transcript",
                 "text": text,
@@ -90,6 +102,13 @@ async def voice_agent_websocket(
         if not is_connected:
             return
         try:
+            # Record transcript
+            recorder.add_transcript(text, role, True)
+            if role == "user":
+                recorder.mark_user_speech_end()
+            elif role == "assistant":
+                recorder.mark_response_start()
+
             await websocket.send_json({
                 "type": "transcript",
                 "text": text,
@@ -104,6 +123,10 @@ async def voice_agent_websocket(
         if not is_connected:
             return
         try:
+            # Record assistant response
+            recorder.add_transcript(text, "assistant", True)
+            recorder.mark_response_start()
+
             await websocket.send_json({
                 "type": "response",
                 "text": text
@@ -154,6 +177,16 @@ async def voice_agent_websocket(
                         realtime_model = assistant_data.get("realtime_model", "") if assistant_data else ""
                         realtime_voice = assistant_data.get("realtime_voice", "alloy") if assistant_data else "alloy"
 
+                        # Configure recorder for realtime mode
+                        recorder.set_config(
+                            voice_mode="realtime",
+                            realtime_provider=realtime_provider,
+                            llm_model=realtime_model,
+                            voice_id=realtime_voice,
+                            assistant_id=assistant_data.get("id") if assistant_data else None,
+                            assistant_name=assistant_data.get("name") if assistant_data else None,
+                        )
+
                         agent = await _create_realtime_agent(
                             provider=realtime_provider,
                             model=realtime_model,
@@ -184,9 +217,23 @@ async def voice_agent_websocket(
                         if assistant_data:
                             config = create_config_from_assistant(assistant_data, credentials)
                             logger.info(f"📋 Config from assistant: LLM={config.llm_provider}/{config.llm_model}, TTS={config.tts_provider}, STT={config.stt_provider}")
+
+                            # Configure recorder for pipeline mode
+                            recorder.set_config(
+                                voice_mode="pipeline",
+                                llm_provider=config.llm_provider,
+                                llm_model=config.llm_model,
+                                stt_provider=config.stt_provider,
+                                tts_provider=config.tts_provider,
+                                voice_id=config.tts_voice,
+                                language=config.language,
+                                assistant_id=assistant_data.get("id"),
+                                assistant_name=assistant_data.get("name"),
+                            )
                         else:
                             config = get_config()
                             logger.info(f"📋 Using default config")
+                            recorder.set_config(voice_mode="pipeline")
 
                         agent = VoiceAgent(config, call_id)
                         agent.on_audio_output = send_audio
@@ -241,6 +288,10 @@ async def voice_agent_websocket(
                     audio_b64 = data.get("data")
                     if audio_b64 and agent:
                         audio_bytes = base64.b64decode(audio_b64)
+
+                        # Record user audio
+                        recorder.record_user_audio(audio_bytes)
+
                         if voice_mode == "realtime":
                             await agent.send_audio(audio_bytes)
                         else:
@@ -287,6 +338,14 @@ async def voice_agent_websocket(
                 await agent.stop()
             elif hasattr(agent, 'close'):
                 await agent.close()
+
+        # Save call log
+        try:
+            call_log = recorder.finish(end_reason="user_hangup")
+            call_log_storage.save(call_log)
+            logger.info(f"💾 Call log saved: {call_id}")
+        except Exception as e:
+            logger.error(f"Failed to save call log: {e}")
 
         if call_id in active_connections:
             del active_connections[call_id]

@@ -5,7 +5,7 @@ from fastapi import APIRouter
 from loguru import logger
 
 # Import required routes
-from app.api.routes import auth, assistants, tools, phone_numbers, calls, voices, analytics, api_keys, settings
+from app.api.routes import auth, assistants, tools, phone_numbers, calls, voices, analytics, api_keys, settings, call_logs
 
 api_router = APIRouter()
 
@@ -19,6 +19,7 @@ api_router.include_router(voices.router, prefix="/voices", tags=["Voices"])
 api_router.include_router(analytics.router, prefix="/analytics", tags=["Analytics"])
 api_router.include_router(api_keys.router, prefix="/api-keys", tags=["API Keys"])
 api_router.include_router(settings.router, prefix="/settings", tags=["Settings"])
+api_router.include_router(call_logs.router, prefix="/call-logs", tags=["Call Logs"])
 
 # Try to import voice route (optional - requires numpy, deepgram)
 try:
