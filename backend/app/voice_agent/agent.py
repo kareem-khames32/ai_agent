@@ -88,6 +88,7 @@ class VoiceAgent:
         self._current_ai_response = ""   # What AI is currently saying (for context)
         self._partial_ai_response = ""   # What AI was saying when interrupted
         self._in_speaking_mode = False   # Flag to block VAD callbacks during SPEAKING
+        self._speaking_ended_time = 0.0  # When SPEAKING state ended (for delayed STT handling)
 
         # Wire up callbacks
         self._setup_callbacks()
@@ -249,6 +250,7 @@ class VoiceAgent:
         # Reset barge-in detection state
         self._bargein_detecting = False
         self._bargein_word_count = 0
+        self._speaking_ended_time = 0.0  # Reset the window
 
         # Reset turn detector for new turn
         self.turn_detector.reset()
@@ -305,10 +307,11 @@ class VoiceAgent:
             self.state = new_state
             logger.info(f"📊 State: {old_state.value} → {new_state.value}")
 
-            # Reset speaking mode flag when leaving SPEAKING state
+            # Track when SPEAKING state ended (for delayed STT handling)
             if old_state == AgentState.SPEAKING:
                 self._in_speaking_mode = False
-                logger.debug("_in_speaking_mode reset to False")
+                self._speaking_ended_time = time.time()
+                logger.debug(f"SPEAKING ended, tracking time for delayed STT")
 
             if self.on_state_change:
                 await self.on_state_change(new_state)
@@ -343,15 +346,21 @@ class VoiceAgent:
         if event.is_final:
             self.latency.mark("stt_final")
 
-        # Handle barge-in: ANY transcript during SPEAKING state triggers barge-in
-        if self.state == AgentState.SPEAKING and self._enable_interruption:
+        # Check if we're in SPEAKING state OR recently left it (Azure STT is slow ~500ms)
+        speaking_or_recent = (
+            self.state == AgentState.SPEAKING or
+            (self._speaking_ended_time > 0 and time.time() - self._speaking_ended_time < 1.5)
+        )
+
+        # Handle barge-in: ANY transcript during or shortly after SPEAKING
+        if speaking_or_recent and self._enable_interruption:
             if event.text and event.text.strip():
                 # Start barge-in detection if not already started
                 if not self._bargein_detecting:
                     self._bargein_detecting = True
                     self._bargein_start_time = time.time()
                     self._partial_ai_response = self._current_ai_response
-                    logger.info(f"🎤 BARGE-IN STARTED via STT! User said: \"{event.text}\"")
+                    logger.info(f"🎤 BARGE-IN STARTED via STT! User said: \"{event.text}\" (state={self.state.value})")
 
                 # Count words in the transcript
                 words = event.text.strip().split()
@@ -369,7 +378,7 @@ class VoiceAgent:
                     await self._handle_bargein(self._bargein_text_buffer)
                     return
 
-            # Don't process normally during SPEAKING
+            # Don't process normally during barge-in window
             return
 
         # Handle barge-in word counting even if state changed to LISTENING
@@ -380,7 +389,7 @@ class VoiceAgent:
                 self._bargein_text_buffer = event.text.strip()
                 self._bargein_word_count = word_count
 
-                logger.info(f"🎤 Barge-in words (listening): {word_count}/{self._interruption_words_required} - \"{event.text}\"")
+                logger.info(f"🎤 Barge-in words (detecting): {word_count}/{self._interruption_words_required} - \"{event.text}\"")
 
                 if self._interruption_words_required <= 0 or word_count >= self._interruption_words_required:
                     logger.info(f"🎤 ✅ BARGE-IN CONFIRMED with {word_count} words!")
