@@ -791,21 +791,64 @@ export default function AssistantEditorPage() {
         </div>
       </div>
 
+      {/* Voice Mode Selection - TOP LEVEL */}
+      <Card className="border-2 border-primary/20 bg-gradient-to-r from-primary/5 to-transparent">
+        <CardContent className="pt-6">
+          <div className="flex items-center gap-4 mb-4">
+            <div className="text-lg font-semibold">🎯 Voice Processing Mode</div>
+            <Badge variant={formData.voiceMode === "realtime" ? "default" : "secondary"}>
+              {formData.voiceMode === "realtime" ? "⚡ Realtime" : "🔧 Pipeline"}
+            </Badge>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            {voiceModes.map((mode) => (
+              <div
+                key={mode.value}
+                onClick={() => updateFormData("voiceMode", mode.value)}
+                className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
+                  formData.voiceMode === mode.value
+                    ? "border-primary bg-primary/10 shadow-lg"
+                    : "border-border hover:border-primary/50 hover:bg-muted/50"
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-2xl">{mode.value === "pipeline" ? "🔧" : "⚡"}</span>
+                  <div>
+                    <div className="font-semibold">{mode.label}</div>
+                    <div className="text-sm text-muted-foreground">{mode.description}</div>
+                  </div>
+                </div>
+                {mode.value === "realtime" && (
+                  <Badge className="mt-2" variant="secondary">Lowest Latency ~300ms</Badge>
+                )}
+                {mode.value === "pipeline" && (
+                  <Badge className="mt-2" variant="outline">Full Control</Badge>
+                )}
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="w-full justify-start overflow-x-auto">
           <TabsTrigger value="model">
             <Bot className="h-4 w-4 mr-2" />
-            Model
+            {formData.voiceMode === "realtime" ? "Realtime Config" : "Model"}
           </TabsTrigger>
-          <TabsTrigger value="voice">
-            <Volume2 className="h-4 w-4 mr-2" />
-            Voice
-          </TabsTrigger>
-          <TabsTrigger value="transcriber">
-            <Mic className="h-4 w-4 mr-2" />
-            Transcriber
-          </TabsTrigger>
+          {formData.voiceMode === "pipeline" && (
+            <>
+              <TabsTrigger value="voice">
+                <Volume2 className="h-4 w-4 mr-2" />
+                Voice
+              </TabsTrigger>
+              <TabsTrigger value="transcriber">
+                <Mic className="h-4 w-4 mr-2" />
+                Transcriber
+              </TabsTrigger>
+            </>
+          )}
           <TabsTrigger value="tools">
             <Wrench className="h-4 w-4 mr-2" />
             Tools
@@ -826,195 +869,48 @@ export default function AssistantEditorPage() {
 
         {/* Model Tab */}
         <TabsContent value="model">
-          <div className="grid gap-6 md:grid-cols-2">
-            <Card>
-              <CardHeader>
-                <CardTitle>LLM Configuration</CardTitle>
-                <CardDescription>Configure the language model</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Provider</label>
-                  <Select
-                    value={formData.modelProvider}
-                    onChange={(v) => {
-                      updateFormData("modelProvider", v);
-                      updateFormData("modelName", modelsByProvider[v]?.[0]?.value || "");
-                    }}
-                    options={modelProviders}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Model</label>
-                  <Select
-                    value={formData.modelName}
-                    onChange={(v) => updateFormData("modelName", v)}
-                    options={(modelsByProvider[formData.modelProvider] || []).map(m => ({
-                      value: m.value,
-                      label: m.label,
-                    }))}
-                  />
-                  {/* Show model price & context */}
-                  {(() => {
-                    const selectedModel = (modelsByProvider[formData.modelProvider] || []).find(m => m.value === formData.modelName);
-                    if (selectedModel) {
-                      return (
-                        <div className="flex gap-2 mt-2 flex-wrap">
-                          {selectedModel.price && <Badge variant="outline">💰 {selectedModel.price}</Badge>}
-                          {selectedModel.context && <Badge variant="outline">📄 {selectedModel.context}</Badge>}
-                        </div>
-                      );
-                    }
-                    return null;
-                  })()}
-                </div>
-
-                <Slider
-                  label="Temperature"
-                  value={formData.temperature}
-                  onChange={(v) => updateFormData("temperature", v)}
-                  min={0}
-                  max={1}
-                  step={0.1}
-                />
-
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Max Tokens</label>
-                  <Input
-                    type="number"
-                    value={formData.maxTokens}
-                    onChange={(e) => updateFormData("maxTokens", parseInt(e.target.value))}
-                  />
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>First Message</CardTitle>
-                <CardDescription>How the conversation starts</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Mode</label>
-                  <Select
-                    value={formData.firstMessageMode}
-                    onChange={(v) => updateFormData("firstMessageMode", v)}
-                    options={firstMessageModes}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">First Message</label>
-                  <Textarea
-                    value={formData.firstMessage}
-                    onChange={(e) => updateFormData("firstMessage", e.target.value)}
-                    placeholder="Enter the assistant's first message..."
-                    className="min-h-[100px]"
-                  />
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="md:col-span-2">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle>System Prompt</CardTitle>
-                    <CardDescription>Instructions for the assistant</CardDescription>
+          {/* REALTIME MODE CONFIG */}
+          {formData.voiceMode === "realtime" ? (
+            <div className="grid gap-6 md:grid-cols-2">
+              {/* Realtime Provider Selection */}
+              <Card className="md:col-span-2">
+                <CardHeader>
+                  <CardTitle>⚡ Realtime Provider</CardTitle>
+                  <CardDescription>Choose your speech-to-speech API provider</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    {realtimeProviders.map((provider) => (
+                      <div
+                        key={provider.value}
+                        onClick={() => {
+                          updateFormData("realtimeProvider", provider.value);
+                          const models = realtimeModelsByProvider[provider.value] || [];
+                          if (models.length > 0) updateFormData("realtimeModel", models[0].value);
+                          const voices = realtimeVoicesByProvider[provider.value] || [];
+                          if (voices.length > 0) updateFormData("realtimeVoice", voices[0].value);
+                        }}
+                        className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
+                          formData.realtimeProvider === provider.value
+                            ? "border-primary bg-primary/10 shadow-lg"
+                            : "border-border hover:border-primary/50"
+                        }`}
+                      >
+                        <div className="font-semibold text-sm">{provider.label}</div>
+                        <div className="text-xs text-muted-foreground mt-1">{provider.description}</div>
+                      </div>
+                    ))}
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setIsExpandedPrompt(!isExpandedPrompt)}
-                  >
-                    <Maximize2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <Textarea
-                  value={formData.systemPrompt}
-                  onChange={(e) => updateFormData("systemPrompt", e.target.value)}
-                  placeholder="Enter the system prompt..."
-                  className={isExpandedPrompt ? "min-h-[400px]" : "min-h-[200px]"}
-                  dir="auto"
-                />
-              </CardContent>
-            </Card>
-          </div>
-        </TabsContent>
+                </CardContent>
+              </Card>
 
-        {/* Voice Tab */}
-        <TabsContent value="voice">
-          {/* Voice Mode Selector */}
-          <Card className="mb-6">
-            <CardHeader>
-              <CardTitle>🎙️ Voice Mode</CardTitle>
-              <CardDescription>Choose how voice processing works</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-2 gap-4">
-                {voiceModes.map((mode) => (
-                  <div
-                    key={mode.value}
-                    onClick={() => updateFormData("voiceMode", mode.value)}
-                    className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
-                      formData.voiceMode === mode.value
-                        ? "border-primary bg-primary/5"
-                        : "border-border hover:border-primary/50"
-                    }`}
-                  >
-                    <div className="font-semibold">{mode.label}</div>
-                    <div className="text-sm text-muted-foreground mt-1">{mode.description}</div>
-                    {mode.value === "realtime" && (
-                      <Badge className="mt-2" variant="secondary">⚡ Lowest Latency</Badge>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Realtime Mode Settings */}
-          {formData.voiceMode === "realtime" && (
-            <Card className="mb-6">
-              <CardHeader>
-                <CardTitle>⚡ Realtime Provider</CardTitle>
-                <CardDescription>Direct speech-to-speech with native voice support</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  {realtimeProviders.map((provider) => (
-                    <div
-                      key={provider.value}
-                      onClick={() => {
-                        updateFormData("realtimeProvider", provider.value);
-                        // Auto-select first model
-                        const models = realtimeModelsByProvider[provider.value] || [];
-                        if (models.length > 0) {
-                          updateFormData("realtimeModel", models[0].value);
-                        }
-                        // Auto-select first voice
-                        const voices = realtimeVoicesByProvider[provider.value] || [];
-                        if (voices.length > 0) {
-                          updateFormData("realtimeVoice", voices[0].value);
-                        }
-                      }}
-                      className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
-                        formData.realtimeProvider === provider.value
-                          ? "border-primary bg-primary/5"
-                          : "border-border hover:border-primary/50"
-                      }`}
-                    >
-                      <div className="font-semibold">{provider.label}</div>
-                      <div className="text-sm text-muted-foreground">{provider.description}</div>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="grid grid-cols-2 gap-4 mt-4">
+              {/* Realtime Model & Voice */}
+              <Card>
+                <CardHeader>
+                  <CardTitle>Model & Voice</CardTitle>
+                  <CardDescription>Configure realtime model settings</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
                   <div className="space-y-2">
                     <label className="text-sm font-medium">Model</label>
                     <Select
@@ -1027,9 +923,7 @@ export default function AssistantEditorPage() {
                     />
                     {(() => {
                       const model = (realtimeModelsByProvider[formData.realtimeProvider] || []).find(m => m.value === formData.realtimeModel);
-                      return model ? (
-                        <div className="text-xs text-muted-foreground">{model.description}</div>
-                      ) : null;
+                      return model ? <div className="text-xs text-muted-foreground">{model.description}</div> : null;
                     })()}
                   </div>
 
@@ -1046,21 +940,192 @@ export default function AssistantEditorPage() {
                       />
                     </div>
                   )}
-                </div>
 
-                {formData.realtimeProvider === "groq" && (
-                  <div className="p-3 bg-yellow-500/10 rounded-lg border border-yellow-500/20">
-                    <div className="text-sm text-yellow-600 dark:text-yellow-400">
-                      ⚠️ Groq uses ultra-fast LLM inference with separate STT/TTS. Configure voice below.
+                  {formData.realtimeProvider === "groq" && (
+                    <div className="p-3 bg-yellow-500/10 rounded-lg border border-yellow-500/20">
+                      <div className="text-sm text-yellow-600 dark:text-yellow-400">
+                        ⚠️ Groq uses ultra-fast LLM + separate TTS. Configure TTS voice in Voice tab.
+                      </div>
                     </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          )}
+                  )}
+                </CardContent>
+              </Card>
 
-          {/* Pipeline Mode Settings OR Groq TTS Settings */}
-          {(formData.voiceMode === "pipeline" || formData.realtimeProvider === "groq") && (
+              {/* First Message */}
+              <Card>
+                <CardHeader>
+                  <CardTitle>First Message</CardTitle>
+                  <CardDescription>How the conversation starts</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Mode</label>
+                    <Select
+                      value={formData.firstMessageMode}
+                      onChange={(v) => updateFormData("firstMessageMode", v)}
+                      options={firstMessageModes}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">First Message</label>
+                    <Textarea
+                      value={formData.firstMessage}
+                      onChange={(e) => updateFormData("firstMessage", e.target.value)}
+                      placeholder="Enter the assistant's first message..."
+                      className="min-h-[100px]"
+                    />
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* System Prompt */}
+              <Card className="md:col-span-2">
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle>System Prompt</CardTitle>
+                      <CardDescription>Instructions for the assistant</CardDescription>
+                    </div>
+                    <Button variant="ghost" size="sm" onClick={() => setIsExpandedPrompt(!isExpandedPrompt)}>
+                      <Maximize2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <Textarea
+                    value={formData.systemPrompt}
+                    onChange={(e) => updateFormData("systemPrompt", e.target.value)}
+                    placeholder="Enter the system prompt..."
+                    className={isExpandedPrompt ? "min-h-[400px]" : "min-h-[200px]"}
+                    dir="auto"
+                  />
+                </CardContent>
+              </Card>
+            </div>
+          ) : (
+            /* PIPELINE MODE CONFIG */
+            <div className="grid gap-6 md:grid-cols-2">
+              <Card>
+                <CardHeader>
+                  <CardTitle>LLM Configuration</CardTitle>
+                  <CardDescription>Configure the language model</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Provider</label>
+                    <Select
+                      value={formData.modelProvider}
+                      onChange={(v) => {
+                        updateFormData("modelProvider", v);
+                        updateFormData("modelName", modelsByProvider[v]?.[0]?.value || "");
+                      }}
+                      options={modelProviders}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Model</label>
+                    <Select
+                      value={formData.modelName}
+                      onChange={(v) => updateFormData("modelName", v)}
+                      options={(modelsByProvider[formData.modelProvider] || []).map(m => ({
+                        value: m.value,
+                        label: m.label,
+                      }))}
+                    />
+                    {(() => {
+                      const selectedModel = (modelsByProvider[formData.modelProvider] || []).find(m => m.value === formData.modelName);
+                      if (selectedModel) {
+                        return (
+                          <div className="flex gap-2 mt-2 flex-wrap">
+                            {selectedModel.price && <Badge variant="outline">💰 {selectedModel.price}</Badge>}
+                            {selectedModel.context && <Badge variant="outline">📄 {selectedModel.context}</Badge>}
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
+                  </div>
+
+                  <Slider
+                    label="Temperature"
+                    value={formData.temperature}
+                    onChange={(v) => updateFormData("temperature", v)}
+                    min={0}
+                    max={1}
+                    step={0.1}
+                  />
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Max Tokens</label>
+                    <Input
+                      type="number"
+                      value={formData.maxTokens}
+                      onChange={(e) => updateFormData("maxTokens", parseInt(e.target.value))}
+                    />
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>First Message</CardTitle>
+                  <CardDescription>How the conversation starts</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Mode</label>
+                    <Select
+                      value={formData.firstMessageMode}
+                      onChange={(v) => updateFormData("firstMessageMode", v)}
+                      options={firstMessageModes}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">First Message</label>
+                    <Textarea
+                      value={formData.firstMessage}
+                      onChange={(e) => updateFormData("firstMessage", e.target.value)}
+                      placeholder="Enter the assistant's first message..."
+                      className="min-h-[100px]"
+                    />
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="md:col-span-2">
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle>System Prompt</CardTitle>
+                      <CardDescription>Instructions for the assistant</CardDescription>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setIsExpandedPrompt(!isExpandedPrompt)}
+                    >
+                      <Maximize2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <Textarea
+                    value={formData.systemPrompt}
+                    onChange={(e) => updateFormData("systemPrompt", e.target.value)}
+                    placeholder="Enter the system prompt..."
+                    className={isExpandedPrompt ? "min-h-[400px]" : "min-h-[200px]"}
+                    dir="auto"
+                  />
+                </CardContent>
+              </Card>
+            </div>
+          )}
+        </TabsContent>
+
+        {/* Voice Tab - Only shown in Pipeline mode */}
+        <TabsContent value="voice">
           <div className="grid gap-6 md:grid-cols-2">
             <Card>
               <CardHeader>
@@ -1165,7 +1230,6 @@ export default function AssistantEditorPage() {
               </CardContent>
             </Card>
           </div>
-          )}
         </TabsContent>
 
         {/* Transcriber Tab */}
