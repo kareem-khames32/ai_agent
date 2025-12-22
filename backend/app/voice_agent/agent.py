@@ -74,7 +74,8 @@ class VoiceAgent:
         self._llm_generating = False  # Track if LLM is still generating
         self._pending_tts_count = 0   # Track pending TTS sentences
         self._last_tts_audio_time = 0.0  # Track when last TTS audio was sent
-        self._bargein_cooldown_ms = 500  # Cooldown after TTS before allowing barge-in
+        self._bargein_cooldown_ms = 300  # Reduced cooldown for responsiveness
+        self._bargein_energy_threshold = 0.03  # Lower threshold for barge-in
 
         # Wire up callbacks
         self._setup_callbacks()
@@ -175,9 +176,12 @@ class VoiceAgent:
             # Check VAD for user speech during AI response
             vad_event = self.vad.process(audio_chunk)
             if vad_event and vad_event.state == VADState.SPEECH_START:
-                # Additional check: require higher energy for barge-in
-                if hasattr(vad_event, 'energy') and vad_event.energy < 0.05:
+                # Check energy threshold for barge-in (filter out echo/noise)
+                energy = getattr(vad_event, 'energy', 0) or 0
+                if energy < self._bargein_energy_threshold:
+                    logger.debug(f"Barge-in ignored: low energy ({energy:.4f} < {self._bargein_energy_threshold})")
                     return  # Energy too low, likely echo
+                logger.info(f"🎤 Barge-in triggered (energy={energy:.4f})")
                 await self._handle_bargein()
                 return
 

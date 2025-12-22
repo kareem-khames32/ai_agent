@@ -201,11 +201,16 @@ class LLMStreamer:
                 if self.on_sentence:
                     await self.on_sentence(current_sentence.strip())
 
-            if full_response and not self.should_cancel:
+            # Always save response to history (even partial on barge-in)
+            # This prevents the AI from repeating itself
+            if full_response:
                 self.add_assistant_message(full_response)
-                logger.info(f"✅ LLM complete: \"{full_response[:100]}...\"")
-                if self.on_complete:
-                    await self.on_complete(full_response)
+                if self.should_cancel:
+                    logger.info(f"🛑 LLM interrupted, saved partial: \"{full_response[:50]}...\"")
+                else:
+                    logger.info(f"✅ LLM complete: \"{full_response[:100]}...\"")
+                    if self.on_complete:
+                        await self.on_complete(full_response)
 
         except Exception as e:
             logger.error(f"LLM generation error: {e}")
