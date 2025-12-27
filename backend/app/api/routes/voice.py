@@ -92,7 +92,8 @@ async def voice_agent_websocket(
                 "type": "transcript",
                 "text": text,
                 "is_final": is_final,
-                "role": "user"
+                "role": "user",
+                "timestamp": time.time() - recorder._start_time
             })
         except Exception as e:
             logger.error(f"Send transcript error: {e}")
@@ -113,10 +114,47 @@ async def voice_agent_websocket(
                 "type": "transcript",
                 "text": text,
                 "role": role,
-                "is_final": True
+                "is_final": True,
+                "timestamp": time.time() - recorder._start_time
             })
+
+            # Send updated metrics after each transcript
+            await send_live_metrics()
         except Exception as e:
             logger.error(f"Send transcript error: {e}")
+
+    async def send_live_metrics():
+        """Send live metrics to client"""
+        if not is_connected:
+            return
+        try:
+            # Calculate current metrics
+            duration = time.time() - recorder._start_time
+            avg_latency = sum(recorder._latencies) / len(recorder._latencies) if recorder._latencies else 0
+            last_latency = recorder._latencies[-1] if recorder._latencies else 0
+
+            # Calculate live cost estimate
+            recorder._calculate_cost()
+
+            await websocket.send_json({
+                "type": "metrics",
+                "duration_sec": round(duration, 1),
+                "response_count": recorder._metrics.response_count,
+                "avg_latency_ms": round(avg_latency, 0),
+                "last_latency_ms": round(last_latency, 0),
+                "cost": {
+                    "total": round(recorder._cost.total_cost, 4),
+                    "stt": round(recorder._cost.stt_cost, 4),
+                    "llm": round(recorder._cost.llm_cost, 4),
+                    "tts": round(recorder._cost.tts_cost, 4),
+                },
+                "tokens": {
+                    "input": recorder._metrics.input_tokens,
+                    "output": recorder._metrics.output_tokens,
+                }
+            })
+        except Exception as e:
+            logger.error(f"Send metrics error: {e}")
 
     async def send_response(text: str):
         """Send AI response to client"""
@@ -129,8 +167,12 @@ async def voice_agent_websocket(
 
             await websocket.send_json({
                 "type": "response",
-                "text": text
+                "text": text,
+                "timestamp": time.time() - recorder._start_time
             })
+
+            # Send updated metrics
+            await send_live_metrics()
         except Exception as e:
             logger.error(f"Send response error: {e}")
 

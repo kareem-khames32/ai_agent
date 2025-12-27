@@ -120,42 +120,92 @@ class CallRecorder:
     - Saves call logs
     """
 
-    # Cost per minute/token (approximate)
+    # Cost per minute/token (accurate as of Dec 2024)
     COST_RATES = {
         "stt": {
-            "deepgram": 0.0043,  # per minute
-            "azure": 0.0167,
-            "openai": 0.006,
-            "groq": 0.0007,
+            # Per minute rates for Speech-to-Text
+            "deepgram": 0.0043,      # Nova-2 model
+            "deepgram_nova": 0.0043,
+            "deepgram_enhanced": 0.0125,
+            "azure": 0.0167,         # Real-time
+            "openai": 0.006,         # Whisper API
+            "groq": 0.0007,          # Whisper-large-v3-turbo
+            "google": 0.016,         # Cloud Speech-to-Text
+            "assemblyai": 0.00025,   # Per second = 0.015/min
             "munsit": 0.01,
         },
         "llm": {
-            "openai": {"input": 0.0025, "output": 0.01},  # per 1K tokens
-            "anthropic": {"input": 0.003, "output": 0.015},
-            "google": {"input": 0.000125, "output": 0.0005},
-            "groq": {"input": 0.00059, "output": 0.00079},
+            # Per 1K tokens
+            "openai": {
+                "gpt-4o": {"input": 0.0025, "output": 0.01},
+                "gpt-4o-mini": {"input": 0.00015, "output": 0.0006},
+                "gpt-4-turbo": {"input": 0.01, "output": 0.03},
+                "gpt-3.5-turbo": {"input": 0.0005, "output": 0.0015},
+                "default": {"input": 0.0025, "output": 0.01},
+            },
+            "anthropic": {
+                "claude-3-5-sonnet": {"input": 0.003, "output": 0.015},
+                "claude-3-opus": {"input": 0.015, "output": 0.075},
+                "claude-3-haiku": {"input": 0.00025, "output": 0.00125},
+                "default": {"input": 0.003, "output": 0.015},
+            },
+            "google": {
+                "gemini-2.0-flash": {"input": 0.0, "output": 0.0},  # Free tier
+                "gemini-1.5-pro": {"input": 0.00125, "output": 0.005},
+                "gemini-1.5-flash": {"input": 0.000075, "output": 0.0003},
+                "default": {"input": 0.000125, "output": 0.0005},
+            },
+            "groq": {
+                "llama-3.3-70b": {"input": 0.00059, "output": 0.00079},
+                "llama-3.1-70b": {"input": 0.00059, "output": 0.00079},
+                "llama-3.1-8b": {"input": 0.00005, "output": 0.00008},
+                "mixtral-8x7b": {"input": 0.00024, "output": 0.00024},
+                "default": {"input": 0.00059, "output": 0.00079},
+            },
         },
         "tts": {
-            "elevenlabs": 0.0003,  # per character
-            "azure": 0.000016,
-            "openai": 0.000015,
-            "deepgram": 0.00003,
+            # Per character rates
+            "elevenlabs": 0.00018,      # ~$18/million chars
+            "elevenlabs_turbo": 0.00008,
+            "azure": 0.000016,           # Neural voices
+            "azure_hd": 0.000024,
+            "openai": 0.000015,          # TTS-1
+            "openai_hd": 0.00003,        # TTS-1-HD
+            "deepgram": 0.000015,        # Aura voices
+            "cartesia": 0.00005,
+            "google": 0.000016,
         },
         "realtime": {
-            "openai": {"input": 0.06, "output": 0.24},  # per minute audio
-            "google": {"input": 0.0, "output": 0.0},  # Free tier
+            # Per minute audio rates for real-time APIs
+            "openai": {
+                "input": 0.06,   # $0.06/min input audio
+                "output": 0.24,  # $0.24/min output audio
+                "text_input": 0.005,   # Per 1K tokens
+                "text_output": 0.02,
+            },
+            "google": {
+                "input": 0.0,    # Gemini Live - free tier
+                "output": 0.0,
+            },
+            "groq": {
+                "input": 0.0007,  # Whisper for STT
+                "output": 0.00059,  # LLM cost only, TTS separate
+            },
         }
     }
 
     def __init__(
         self,
         call_id: str,
-        sample_rate: int = 16000,
+        user_sample_rate: int = 16000,
+        assistant_sample_rate: int = 24000,
         channels: int = 1,
         recordings_dir: str = "recordings"
     ):
         self.call_id = call_id
-        self.sample_rate = sample_rate
+        self.user_sample_rate = user_sample_rate
+        self.assistant_sample_rate = assistant_sample_rate
+        self.sample_rate = assistant_sample_rate  # For backward compat
         self.channels = channels
         self.recordings_dir = Path(recordings_dir)
         self.recordings_dir.mkdir(parents=True, exist_ok=True)
@@ -167,10 +217,9 @@ class CallRecorder:
             status=CallStatus.IN_PROGRESS.value
         )
 
-        # Audio buffers
+        # Audio buffers - separate for user and assistant
         self._user_audio_buffer = io.BytesIO()
         self._assistant_audio_buffer = io.BytesIO()
-        self._combined_audio_buffer = io.BytesIO()
 
         # Timing
         self._start_time = time.time()
@@ -213,21 +262,19 @@ class CallRecorder:
         self.call_log.assistant_name = assistant_name
 
     def record_user_audio(self, audio_chunk: bytes):
-        """Record user audio chunk"""
+        """Record user audio chunk (16kHz 16-bit mono PCM)"""
         self._user_audio_buffer.write(audio_chunk)
-        self._combined_audio_buffer.write(audio_chunk)
 
-        # Update metrics
-        duration = len(audio_chunk) / (self.sample_rate * 2)  # 16-bit audio
+        # Update metrics - 16-bit audio = 2 bytes per sample
+        duration = len(audio_chunk) / (self.user_sample_rate * 2)
         self._metrics.user_audio_duration_sec += duration
 
     def record_assistant_audio(self, audio_chunk: bytes):
-        """Record assistant audio chunk"""
+        """Record assistant audio chunk (24kHz 16-bit mono PCM)"""
         self._assistant_audio_buffer.write(audio_chunk)
-        self._combined_audio_buffer.write(audio_chunk)
 
-        # Update metrics
-        duration = len(audio_chunk) / (self.sample_rate * 2)
+        # Update metrics - 16-bit audio = 2 bytes per sample
+        duration = len(audio_chunk) / (self.assistant_sample_rate * 2)
         self._metrics.assistant_audio_duration_sec += duration
 
     def add_transcript(self, text: str, role: str, is_final: bool = True):
@@ -266,7 +313,7 @@ class CallRecorder:
         self._metrics.tts_latency_ms = tts_ms
 
     def _calculate_cost(self):
-        """Calculate estimated cost"""
+        """Calculate estimated cost with model-specific rates"""
         voice_mode = self.call_log.voice_mode
 
         if voice_mode == "realtime":
@@ -277,25 +324,53 @@ class CallRecorder:
             input_minutes = self._metrics.user_audio_duration_sec / 60
             output_minutes = self._metrics.assistant_audio_duration_sec / 60
 
-            self._cost.total_cost = (input_minutes * rates["input"]) + (output_minutes * rates["output"])
+            # Calculate audio cost
+            audio_cost = (input_minutes * rates.get("input", 0)) + (output_minutes * rates.get("output", 0))
+
+            # Add text token cost if applicable (for realtime with text)
+            text_cost = 0
+            if "text_input" in rates and "text_output" in rates:
+                text_cost = (
+                    (self._metrics.input_tokens / 1000) * rates["text_input"] +
+                    (self._metrics.output_tokens / 1000) * rates["text_output"]
+                )
+
+            self._cost.total_cost = audio_cost + text_cost
+            self._cost.stt_cost = input_minutes * rates.get("input", 0)
+            self._cost.tts_cost = output_minutes * rates.get("output", 0)
+            self._cost.llm_cost = text_cost
         else:
             # Pipeline pricing
             # STT cost
-            stt_provider = self.call_log.stt_provider
+            stt_provider = self.call_log.stt_provider.lower() if self.call_log.stt_provider else ""
             stt_rate = self.COST_RATES["stt"].get(stt_provider, 0.005)
             stt_minutes = self._metrics.user_audio_duration_sec / 60
             self._cost.stt_cost = stt_minutes * stt_rate
 
-            # LLM cost
-            llm_provider = self.call_log.llm_provider
-            llm_rates = self.COST_RATES["llm"].get(llm_provider, {"input": 0.002, "output": 0.01})
+            # LLM cost - use model-specific rates if available
+            llm_provider = self.call_log.llm_provider.lower() if self.call_log.llm_provider else ""
+            llm_model = self.call_log.llm_model.lower() if self.call_log.llm_model else ""
+
+            llm_provider_rates = self.COST_RATES["llm"].get(llm_provider, {})
+            if isinstance(llm_provider_rates, dict):
+                # Find model-specific rate or use default
+                llm_rates = None
+                for model_key in llm_provider_rates:
+                    if model_key != "default" and model_key in llm_model:
+                        llm_rates = llm_provider_rates[model_key]
+                        break
+                if not llm_rates:
+                    llm_rates = llm_provider_rates.get("default", {"input": 0.002, "output": 0.01})
+            else:
+                llm_rates = {"input": 0.002, "output": 0.01}
+
             self._cost.llm_cost = (
                 (self._metrics.input_tokens / 1000) * llm_rates["input"] +
                 (self._metrics.output_tokens / 1000) * llm_rates["output"]
             )
 
-            # TTS cost (approximate characters)
-            tts_provider = self.call_log.tts_provider
+            # TTS cost (per character)
+            tts_provider = self.call_log.tts_provider.lower() if self.call_log.tts_provider else ""
             tts_rate = self.COST_RATES["tts"].get(tts_provider, 0.00002)
             total_chars = sum(len(t.text) for t in self._transcripts if t.role == "assistant")
             self._cost.tts_cost = total_chars * tts_rate
@@ -303,26 +378,42 @@ class CallRecorder:
             self._cost.total_cost = self._cost.stt_cost + self._cost.llm_cost + self._cost.tts_cost
 
     def _save_recording(self) -> Optional[str]:
-        """Save combined audio to WAV file"""
+        """Save recordings to WAV files"""
         try:
-            audio_data = self._combined_audio_buffer.getvalue()
-            if not audio_data:
-                return None
-
-            # Generate filename
             timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-            filename = f"{self.call_id}_{timestamp}.wav"
-            filepath = self.recordings_dir / filename
+            saved_path = None
 
-            # Write WAV file
-            with wave.open(str(filepath), 'wb') as wav_file:
-                wav_file.setnchannels(self.channels)
-                wav_file.setsampwidth(2)  # 16-bit
-                wav_file.setframerate(self.sample_rate)
-                wav_file.writeframes(audio_data)
+            # Save assistant audio (main recording - what the AI said)
+            assistant_data = self._assistant_audio_buffer.getvalue()
+            if assistant_data:
+                filename = f"{self.call_id}_{timestamp}_assistant.wav"
+                filepath = self.recordings_dir / filename
 
-            logger.info(f"📁 Recording saved: {filepath}")
-            return str(filepath)
+                with wave.open(str(filepath), 'wb') as wav_file:
+                    wav_file.setnchannels(self.channels)
+                    wav_file.setsampwidth(2)  # 16-bit
+                    wav_file.setframerate(self.assistant_sample_rate)
+                    wav_file.writeframes(assistant_data)
+
+                saved_path = str(filepath)
+                logger.info(f"📁 Assistant recording saved: {filepath}")
+
+            # Save user audio separately
+            user_data = self._user_audio_buffer.getvalue()
+            if user_data:
+                filename = f"{self.call_id}_{timestamp}_user.wav"
+                filepath = self.recordings_dir / filename
+
+                with wave.open(str(filepath), 'wb') as wav_file:
+                    wav_file.setnchannels(self.channels)
+                    wav_file.setsampwidth(2)  # 16-bit
+                    wav_file.setframerate(self.user_sample_rate)
+                    wav_file.writeframes(user_data)
+
+                logger.info(f"📁 User recording saved: {filepath}")
+
+            # Return assistant recording path (main recording)
+            return saved_path
 
         except Exception as e:
             logger.error(f"Failed to save recording: {e}")

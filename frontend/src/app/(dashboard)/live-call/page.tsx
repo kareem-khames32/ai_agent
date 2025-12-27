@@ -22,6 +22,10 @@ import {
   Radio,
   Bot,
   Settings,
+  Clock,
+  DollarSign,
+  Zap,
+  MessageSquare,
 } from "lucide-react";
 
 interface TranscriptEntry {
@@ -29,6 +33,23 @@ interface TranscriptEntry {
   text: string;
   timestamp: Date;
   isFinal?: boolean;
+}
+
+interface LiveMetrics {
+  durationSec: number;
+  responseCount: number;
+  avgLatencyMs: number;
+  lastLatencyMs: number;
+  cost: {
+    total: number;
+    stt: number;
+    llm: number;
+    tts: number;
+  };
+  tokens: {
+    input: number;
+    output: number;
+  };
 }
 
 interface StopSpeakingPlan {
@@ -189,6 +210,9 @@ export default function LiveCallPage() {
   // Transcript
   const [transcript, setTranscript] = React.useState<TranscriptEntry[]>([]);
   const [interimText, setInterimText] = React.useState<string>("");
+
+  // Live metrics
+  const [liveMetrics, setLiveMetrics] = React.useState<LiveMetrics | null>(null);
 
   // Refs
   const wsRef = React.useRef<WebSocket | null>(null);
@@ -376,6 +400,17 @@ export default function LiveCallPage() {
         }
         break;
 
+      case "metrics":
+        setLiveMetrics({
+          durationSec: message.duration_sec || 0,
+          responseCount: message.response_count || 0,
+          avgLatencyMs: message.avg_latency_ms || 0,
+          lastLatencyMs: message.last_latency_ms || 0,
+          cost: message.cost || { total: 0, stt: 0, llm: 0, tts: 0 },
+          tokens: message.tokens || { input: 0, output: 0 },
+        });
+        break;
+
       case "error":
         addToast({
           type: "error",
@@ -518,6 +553,7 @@ export default function LiveCallPage() {
     setStatus("disconnected");
     setAgentState("idle");
     setCallId(null);
+    setLiveMetrics(null);
     nextPlayTimeRef.current = 0;
     audioQueueRef.current = [];
   };
@@ -630,6 +666,75 @@ export default function LiveCallPage() {
           )}
         </div>
       </div>
+
+      {/* Live Metrics Panel - Shows during call */}
+      {status === "connected" && liveMetrics && (
+        <Card className="bg-gradient-to-r from-[var(--card)] to-[var(--muted)]">
+          <CardContent className="py-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {/* Duration */}
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-blue-500/10">
+                  <Clock className="h-5 w-5 text-blue-500" />
+                </div>
+                <div>
+                  <p className="text-xs text-[var(--muted-foreground)]">المدة</p>
+                  <p className="text-lg font-semibold">
+                    {Math.floor(liveMetrics.durationSec / 60)}:{String(Math.floor(liveMetrics.durationSec % 60)).padStart(2, '0')}
+                  </p>
+                </div>
+              </div>
+
+              {/* Latency */}
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-yellow-500/10">
+                  <Zap className="h-5 w-5 text-yellow-500" />
+                </div>
+                <div>
+                  <p className="text-xs text-[var(--muted-foreground)]">زمن الاستجابة</p>
+                  <p className="text-lg font-semibold">
+                    {liveMetrics.lastLatencyMs > 0 ? `${liveMetrics.lastLatencyMs}ms` : '-'}
+                  </p>
+                  {liveMetrics.avgLatencyMs > 0 && (
+                    <p className="text-xs text-[var(--muted-foreground)]">
+                      متوسط: {liveMetrics.avgLatencyMs}ms
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Cost */}
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-green-500/10">
+                  <DollarSign className="h-5 w-5 text-green-500" />
+                </div>
+                <div>
+                  <p className="text-xs text-[var(--muted-foreground)]">التكلفة</p>
+                  <p className="text-lg font-semibold">
+                    ${liveMetrics.cost.total.toFixed(4)}
+                  </p>
+                </div>
+              </div>
+
+              {/* Responses */}
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-purple-500/10">
+                  <MessageSquare className="h-5 w-5 text-purple-500" />
+                </div>
+                <div>
+                  <p className="text-xs text-[var(--muted-foreground)]">الردود</p>
+                  <p className="text-lg font-semibold">{liveMetrics.responseCount}</p>
+                  {liveMetrics.tokens.output > 0 && (
+                    <p className="text-xs text-[var(--muted-foreground)]">
+                      {liveMetrics.tokens.input + liveMetrics.tokens.output} tokens
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Controls */}
