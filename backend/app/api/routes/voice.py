@@ -7,6 +7,7 @@ import base64
 import json
 import time
 import os
+import struct
 from typing import Optional, Dict, Any, Union
 from uuid import uuid4
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends, Query
@@ -17,6 +18,38 @@ from loguru import logger
 from app.voice_agent import VoiceAgent, VoiceAgentConfig, get_config, create_config_from_assistant, AgentState
 from app.voice_agent.realtime import OpenAIRealtimeAgent, GoogleGeminiLiveAgent, GroqFastAgent
 from app.voice_agent.call_recorder import CallRecorder, call_log_storage
+
+
+def resample_audio_16k_to_24k(audio_bytes: bytes) -> bytes:
+    """
+    Resample audio from 16kHz to 24kHz (for OpenAI Realtime API)
+    Uses simple linear interpolation
+    """
+    # Unpack 16-bit samples
+    num_samples = len(audio_bytes) // 2
+    if num_samples == 0:
+        return audio_bytes
+
+    samples = struct.unpack(f'<{num_samples}h', audio_bytes)
+
+    # Resample ratio: 24000/16000 = 1.5
+    ratio = 1.5
+    new_length = int(num_samples * ratio)
+
+    resampled = []
+    for i in range(new_length):
+        src_pos = i / ratio
+        src_idx = int(src_pos)
+        frac = src_pos - src_idx
+
+        if src_idx >= len(samples) - 1:
+            resampled.append(samples[-1])
+        else:
+            # Linear interpolation
+            sample = int(samples[src_idx] * (1 - frac) + samples[src_idx + 1] * frac)
+            resampled.append(max(-32768, min(32767, sample)))
+
+    return struct.pack(f'<{len(resampled)}h', *resampled)
 
 router = APIRouter()
 
@@ -103,6 +136,8 @@ async def voice_agent_websocket(
         if not is_connected:
             return
         try:
+            logger.info(f"📝 Realtime transcript ({role}): {text[:100]}...")
+
             # Record transcript
             recorder.add_transcript(text, role, True)
             if role == "user":
@@ -120,6 +155,8 @@ async def voice_agent_websocket(
 
             # Send updated metrics after each transcript
             await send_live_metrics()
+
+            logger.debug(f"📊 Transcript count: {len(recorder._transcripts)}")
         except Exception as e:
             logger.error(f"Send transcript error: {e}")
 
@@ -246,11 +283,21 @@ async def voice_agent_websocket(
                         )
 
                         if agent:
+                            # Define error handler as proper async function
+                            async def send_error(msg: str):
+                                try:
+                                    logger.error(f"Realtime error: {msg}")
+                                    await websocket.send_json({"type": "error", "message": msg})
+                                except Exception:
+                                    pass
+
                             # Set up realtime callbacks
                             agent.on_audio_output = send_audio
                             agent.on_transcript = send_transcript_realtime
                             agent.on_state_change = send_state
-                            agent.on_error = lambda msg: websocket.send_json({"type": "error", "message": msg})
+                            agent.on_error = send_error
+
+                            logger.info(f"📋 Realtime callbacks configured for {realtime_provider}")
 
                             # Connect to realtime API
                             connected = await agent.connect()
@@ -342,7 +389,38 @@ async def voice_agent_websocket(
                         recorder.record_user_audio(audio_bytes)
 
                         if voice_mode == "realtime":
-                            await agent.send_audio(audio_bytes)
+                            # OpenAI Realtime needs 24kHz audio, browser sends 16kHz
+                            if isinstance(agent, OpenAIRealtimeAgent):
+                                audio_to_send = resample_audio_16k_to_24k(audio_bytes)
+                            else:
+                                audio_to_send = audio_bytes
+
+                            await agent.send_audio(audio_to_send)
+
+                            # For Groq, we need to detect silence and trigger processing
+                            if isinstance(agent, GroqFastAgent):
+                                # Simple energy-based silence detection
+                                if hasattr(recorder, '_groq_silence_samples'):
+                                    recorder._groq_silence_samples += 1
+                                else:
+                                    recorder._groq_silence_samples = 0
+                                    recorder._groq_last_audio_energy = 0
+
+                                # Calculate audio energy (simple RMS)
+                                import struct
+                                samples = struct.unpack(f'<{len(audio_bytes)//2}h', audio_bytes)
+                                energy = sum(s*s for s in samples) / len(samples) if samples else 0
+
+                                # Detect silence (energy below threshold for ~500ms)
+                                if energy < 500000:  # Low energy = silence
+                                    recorder._groq_silence_samples += 1
+                                    # ~500ms of silence at 50 samples/sec
+                                    if recorder._groq_silence_samples >= 25:
+                                        recorder._groq_silence_samples = 0
+                                        # Process accumulated audio
+                                        asyncio.create_task(agent.process_turn())
+                                else:
+                                    recorder._groq_silence_samples = 0
                         else:
                             await agent.process_audio(audio_bytes)
 
