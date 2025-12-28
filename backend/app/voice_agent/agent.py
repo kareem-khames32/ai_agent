@@ -17,6 +17,7 @@ from .pipeline import (
     TTSStreamer
 )
 from .utils.logger import get_logger, LatencyTracker
+from .prompts import is_noise_only, clean_transcript
 
 logger = get_logger(__name__)
 
@@ -136,9 +137,10 @@ class VoiceAgent:
         if not await self.llm.initialize():
             raise RuntimeError("Failed to initialize LLM")
 
-        # Set system prompt
+        # Set system prompt with language from config
+        language = self.config.stt_language or "ar"
         if system_prompt:
-            self.llm.set_system_prompt(system_prompt)
+            self.llm.set_system_prompt(system_prompt, language=language)
 
         self._is_running = True
         await self._set_state(AgentState.LISTENING)
@@ -146,7 +148,7 @@ class VoiceAgent:
         # Start turn check loop
         self._turn_check_task = asyncio.create_task(self._turn_check_loop())
 
-        logger.info(f"✅ VoiceAgent started (call_id={self.call_id})")
+        logger.info(f"✅ VoiceAgent started (call_id={self.call_id}, language={language})")
 
     async def stop(self):
         """Stop the voice agent"""
@@ -433,14 +435,29 @@ class VoiceAgent:
 
     async def _on_turn_complete(self, text: str):
         """Turn complete, generate response"""
-        logger.info(f"🎯 Turn complete: \"{text}\"")
+        language = self.config.stt_language or "ar"
+
+        # Filter out noise-only input (الو، ها، آه، etc.)
+        if is_noise_only(text, language):
+            logger.info(f"🔇 Ignoring noise-only input: \"{text}\"")
+            await self._set_state(AgentState.LISTENING)
+            return
+
+        # Clean transcript (remove leading noise words)
+        cleaned_text = clean_transcript(text, language)
+        if not cleaned_text.strip():
+            logger.info(f"🔇 Empty after cleaning: \"{text}\"")
+            await self._set_state(AgentState.LISTENING)
+            return
+
+        logger.info(f"🎯 Turn complete: \"{cleaned_text}\"")
 
         await self._set_state(AgentState.PROCESSING)
         self.latency.mark("llm_start")
 
         # Generate response in background
         self._response_task = asyncio.create_task(
-            self._generate_response(text)
+            self._generate_response(cleaned_text)
         )
 
     async def _generate_response(self, user_text: str):

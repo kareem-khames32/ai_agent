@@ -822,16 +822,30 @@ export default function CallLogsPage() {
             endTime: call.ended_at || call.started_at,
             duration: call.duration_sec || 0,
             status: call.status === "completed" ? "completed" : "failed",
-            transcript: [],
+            // Get transcripts from server data
+            transcript: (call.transcripts || []).map((t: any) => ({
+              role: t.role || "user",
+              text: t.text || "",
+              timestamp: t.timestamp ? new Date(call.started_at).getTime() + (t.timestamp * 1000) : call.started_at,
+            })),
             metadata: {
-              llmProvider: call.voice_mode,
-              llmModel: call.realtime_provider || "pipeline",
+              llmProvider: call.llm_provider || call.voice_mode,
+              llmModel: call.llm_model || call.realtime_provider || "pipeline",
+              ttsProvider: call.tts_provider || "",
+              sttProvider: call.stt_provider || "",
+              language: call.language || "ar",
             },
             cost: {
-              stt: { minutes: 0, provider: "", cost: 0 },
-              llm: { input_tokens: 0, output_tokens: 0, provider: "", model: "", cost: 0 },
-              tts: { characters: 0, provider: "", cost: 0 },
-              total_cost: call.total_cost || 0,
+              stt: { minutes: call.metrics?.user_audio_duration_sec / 60 || 0, provider: call.stt_provider || "", cost: call.cost?.stt_cost || 0 },
+              llm: { input_tokens: call.metrics?.input_tokens || 0, output_tokens: call.metrics?.output_tokens || 0, provider: call.llm_provider || "", model: call.llm_model || "", cost: call.cost?.llm_cost || 0 },
+              tts: { characters: 0, provider: call.tts_provider || "", cost: call.cost?.tts_cost || 0 },
+              total_cost: call.cost?.total_cost || call.total_cost || 0,
+            },
+            latency: {
+              avgResponseTime: call.metrics?.avg_latency_ms || 0,
+              sttLatency: call.metrics?.stt_latency_ms || 0,
+              llmLatency: call.metrics?.llm_latency_ms || 0,
+              ttsLatency: call.metrics?.tts_latency_ms || 0,
             },
             _isServerLog: true,  // Mark as server log for special handling
           }));

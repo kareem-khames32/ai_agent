@@ -9,6 +9,7 @@ from typing import Optional, Callable, Awaitable
 from enum import Enum
 
 from ..utils.logger import get_logger
+from ..prompts import build_system_prompt
 
 logger = get_logger(__name__)
 
@@ -44,12 +45,18 @@ class GoogleGeminiLiveAgent:
         voice: str = "Aoede",
         system_prompt: str = "",
         call_id: Optional[str] = None,
+        language: str = "ar",
+        max_tokens: int = 200,
     ):
         self.api_key = api_key
         self.model = model
         self.voice = voice
-        self.system_prompt = system_prompt
         self.call_id = call_id or "gemini-live"
+        self.language = language
+        self.max_tokens = max_tokens
+
+        # Build system prompt with internal voice call instructions
+        self.system_prompt = build_system_prompt(system_prompt, language=language)
 
         self.state = GeminiLiveState.DISCONNECTED
         self._ws = None

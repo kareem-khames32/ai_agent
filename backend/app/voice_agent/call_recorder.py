@@ -552,9 +552,22 @@ class CallLogStorage:
                 return json.load(f)
         return None
 
-    def list_calls(self, limit: int = 50, offset: int = 0) -> Dict[str, Any]:
+    def list_calls(self, limit: int = 50, offset: int = 0, include_details: bool = True) -> Dict[str, Any]:
         """List call logs with pagination"""
-        calls = self._index["calls"][offset:offset + limit]
+        call_summaries = self._index["calls"][offset:offset + limit]
+
+        if include_details:
+            # Load full call details including transcripts
+            calls = []
+            for summary in call_summaries:
+                full_call = self.get(summary["call_id"])
+                if full_call:
+                    calls.append(full_call)
+                else:
+                    calls.append(summary)
+        else:
+            calls = call_summaries
+
         return {
             "calls": calls,
             "total_count": self._index["total_count"],

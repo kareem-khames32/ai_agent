@@ -219,12 +219,17 @@ async def voice_agent_websocket(
                         realtime_model = assistant_data.get("realtime_model", "") if assistant_data else ""
                         realtime_voice = assistant_data.get("realtime_voice", "alloy") if assistant_data else "alloy"
 
+                        # Get language and max_tokens from assistant data
+                        language = assistant_data.get("transcriber_language", "ar") if assistant_data else "ar"
+                        max_tokens = assistant_data.get("max_tokens", 200) if assistant_data else 200
+
                         # Configure recorder for realtime mode
                         recorder.set_config(
                             voice_mode="realtime",
                             realtime_provider=realtime_provider,
                             llm_model=realtime_model,
                             voice_id=realtime_voice,
+                            language=language,
                             assistant_id=assistant_data.get("id") if assistant_data else None,
                             assistant_name=assistant_data.get("name") if assistant_data else None,
                         )
@@ -235,7 +240,9 @@ async def voice_agent_websocket(
                             voice=realtime_voice,
                             system_prompt=system_prompt,
                             credentials=credentials,
-                            call_id=call_id
+                            call_id=call_id,
+                            language=language,
+                            max_tokens=max_tokens,
                         )
 
                         if agent:
@@ -424,11 +431,13 @@ async def _create_realtime_agent(
     voice: str,
     system_prompt: str,
     credentials: Dict[str, Any],
-    call_id: str
+    call_id: str,
+    language: str = "ar",
+    max_tokens: int = 200,
 ) -> Optional[Union[OpenAIRealtimeAgent, GoogleGeminiLiveAgent, GroqFastAgent]]:
     """Create the appropriate realtime agent based on provider"""
 
-    logger.debug(f"Creating realtime agent: provider={provider}, credentials_keys={list(credentials.keys())}")
+    logger.debug(f"Creating realtime agent: provider={provider}, language={language}, max_tokens={max_tokens}")
 
     if provider == "openai":
         api_key = _get_api_key(credentials, "openai", "OPENAI_API_KEY")
@@ -441,7 +450,9 @@ async def _create_realtime_agent(
             model=model or "gpt-4o-realtime-preview-2024-12-17",
             voice=voice or "alloy",
             system_prompt=system_prompt,
-            call_id=call_id
+            call_id=call_id,
+            language=language,
+            max_tokens=max_tokens,
         )
 
     elif provider == "google":
@@ -456,7 +467,9 @@ async def _create_realtime_agent(
             model=model or "gemini-2.0-flash-exp",
             voice=voice or "Aoede",
             system_prompt=system_prompt,
-            call_id=call_id
+            call_id=call_id,
+            language=language,
+            max_tokens=max_tokens,
         )
 
     elif provider == "groq":
@@ -475,7 +488,9 @@ async def _create_realtime_agent(
             system_prompt=system_prompt,
             call_id=call_id,
             tts_provider="openai",
-            tts_api_key=tts_api_key
+            tts_api_key=tts_api_key,
+            language=language,
+            max_tokens=max_tokens,
         )
 
     else:

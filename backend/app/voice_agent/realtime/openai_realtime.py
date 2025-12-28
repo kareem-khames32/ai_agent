@@ -10,6 +10,7 @@ from typing import Optional, Callable, Awaitable
 from enum import Enum
 
 from ..utils.logger import get_logger
+from ..prompts import build_system_prompt
 
 logger = get_logger(__name__)
 
@@ -44,12 +45,18 @@ class OpenAIRealtimeAgent:
         voice: str = "alloy",
         system_prompt: str = "",
         call_id: Optional[str] = None,
+        language: str = "ar",
+        max_tokens: int = 200,
     ):
         self.api_key = api_key
         self.model = model
         self.voice = voice
-        self.system_prompt = system_prompt
         self.call_id = call_id or "realtime"
+        self.language = language
+        self.max_tokens = max_tokens
+
+        # Build system prompt with internal voice call instructions
+        self.system_prompt = build_system_prompt(system_prompt, language=language)
 
         self.state = RealtimeState.DISCONNECTED
         self._ws: Optional[websockets.WebSocketClientProtocol] = None
@@ -118,11 +125,12 @@ class OpenAIRealtimeAgent:
                     "prefix_padding_ms": 300,
                     "silence_duration_ms": 500,
                 },
+                "max_response_output_tokens": self.max_tokens,
             }
         }
 
         await self._ws.send(json.dumps(config))
-        logger.info(f"📋 Session configured (voice={self.voice})")
+        logger.info(f"📋 Session configured (voice={self.voice}, max_tokens={self.max_tokens})")
 
     async def _receive_loop(self):
         """Receive and process messages from OpenAI"""

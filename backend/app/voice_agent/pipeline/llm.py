@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 
 from ..utils.logger import get_logger
 from ..config import VoiceAgentConfig
+from ..prompts import build_system_prompt
 
 logger = get_logger(__name__)
 
@@ -125,10 +126,12 @@ class LLMStreamer:
 
         return True
 
-    def set_system_prompt(self, prompt: str):
-        """Set the system prompt"""
-        self.context.system_prompt = prompt
-        logger.debug(f"System prompt set ({len(prompt)} chars)")
+    def set_system_prompt(self, prompt: str, language: str = "ar"):
+        """Set the system prompt with internal voice call instructions"""
+        # Build complete prompt with internal instructions
+        full_prompt = build_system_prompt(prompt, language=language)
+        self.context.system_prompt = full_prompt
+        logger.debug(f"System prompt set ({len(full_prompt)} chars, internal + user)")
 
     def add_user_message(self, content: str):
         """Add user message to context"""

@@ -9,6 +9,7 @@ from typing import Optional, Callable, Awaitable, List, Dict, Any
 from enum import Enum
 
 from ..utils.logger import get_logger
+from ..prompts import build_system_prompt
 
 logger = get_logger(__name__)
 
@@ -43,14 +44,20 @@ class GroqFastAgent:
         call_id: Optional[str] = None,
         tts_provider: str = "openai",  # Fallback TTS provider
         tts_api_key: Optional[str] = None,
+        language: str = "ar",
+        max_tokens: int = 200,
     ):
         self.api_key = api_key
         self.model = model
         self.voice = voice
-        self.system_prompt = system_prompt
         self.call_id = call_id or "groq-fast"
         self.tts_provider = tts_provider
         self.tts_api_key = tts_api_key
+        self.language = language
+        self.max_tokens = max_tokens
+
+        # Build system prompt with internal voice call instructions
+        self.system_prompt = build_system_prompt(system_prompt, language=language)
 
         self.state = GroqFastState.DISCONNECTED
         self._is_running = False
@@ -60,8 +67,8 @@ class GroqFastAgent:
 
         # Conversation history
         self._messages: List[Dict[str, Any]] = []
-        if system_prompt:
-            self._messages.append({"role": "system", "content": system_prompt})
+        if self.system_prompt:
+            self._messages.append({"role": "system", "content": self.system_prompt})
 
         # Audio buffer for STT
         self._audio_buffer = io.BytesIO()
