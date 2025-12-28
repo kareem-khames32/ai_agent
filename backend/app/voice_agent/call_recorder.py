@@ -377,14 +377,99 @@ class CallRecorder:
 
             self._cost.total_cost = self._cost.stt_cost + self._cost.llm_cost + self._cost.tts_cost
 
+    def _resample_audio(self, audio_bytes: bytes, from_rate: int, to_rate: int) -> bytes:
+        """
+        Simple linear interpolation resampling (no numpy needed)
+
+        Args:
+            audio_bytes: 16-bit PCM audio
+            from_rate: Source sample rate
+            to_rate: Target sample rate
+
+        Returns:
+            Resampled audio bytes
+        """
+        if from_rate == to_rate:
+            return audio_bytes
+
+        import struct
+
+        # Unpack samples
+        num_samples = len(audio_bytes) // 2
+        samples = struct.unpack(f'<{num_samples}h', audio_bytes)
+
+        # Calculate ratio
+        ratio = to_rate / from_rate
+        new_length = int(num_samples * ratio)
+
+        # Linear interpolation resampling
+        resampled = []
+        for i in range(new_length):
+            src_pos = i / ratio
+            src_idx = int(src_pos)
+            frac = src_pos - src_idx
+
+            if src_idx >= len(samples) - 1:
+                resampled.append(samples[-1])
+            else:
+                # Linear interpolation between two samples
+                sample = int(samples[src_idx] * (1 - frac) + samples[src_idx + 1] * frac)
+                resampled.append(max(-32768, min(32767, sample)))
+
+        # Pack back to bytes
+        return struct.pack(f'<{len(resampled)}h', *resampled)
+
     def _save_recording(self) -> Optional[str]:
-        """Save recordings to WAV files"""
+        """Save recordings to WAV files - including stereo mix"""
         try:
+            import struct
+
             timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
             saved_path = None
 
-            # Save assistant audio (main recording - what the AI said)
+            user_data = self._user_audio_buffer.getvalue()
             assistant_data = self._assistant_audio_buffer.getvalue()
+
+            # Save stereo mix (user on left, assistant on right)
+            if user_data and assistant_data:
+                # Resample user audio from 16kHz to 24kHz to match assistant
+                user_resampled = self._resample_audio(
+                    user_data,
+                    self.user_sample_rate,
+                    self.assistant_sample_rate
+                )
+
+                # Unpack both channels
+                user_samples = struct.unpack(f'<{len(user_resampled) // 2}h', user_resampled)
+                assistant_samples = struct.unpack(f'<{len(assistant_data) // 2}h', assistant_data)
+
+                # Make them the same length
+                max_len = max(len(user_samples), len(assistant_samples))
+                user_padded = user_samples + (0,) * (max_len - len(user_samples))
+                assistant_padded = assistant_samples + (0,) * (max_len - len(assistant_samples))
+
+                # Interleave for stereo (left=user, right=assistant)
+                stereo_samples = []
+                for i in range(max_len):
+                    stereo_samples.append(user_padded[i])      # Left channel (user)
+                    stereo_samples.append(assistant_padded[i])  # Right channel (assistant)
+
+                stereo_data = struct.pack(f'<{len(stereo_samples)}h', *stereo_samples)
+
+                # Save stereo file
+                filename = f"{self.call_id}_{timestamp}_stereo.wav"
+                filepath = self.recordings_dir / filename
+
+                with wave.open(str(filepath), 'wb') as wav_file:
+                    wav_file.setnchannels(2)  # Stereo
+                    wav_file.setsampwidth(2)  # 16-bit
+                    wav_file.setframerate(self.assistant_sample_rate)
+                    wav_file.writeframes(stereo_data)
+
+                saved_path = str(filepath)
+                logger.info(f"📁 Stereo recording saved: {filepath}")
+
+            # Also save individual channels for flexibility
             if assistant_data:
                 filename = f"{self.call_id}_{timestamp}_assistant.wav"
                 filepath = self.recordings_dir / filename
@@ -395,11 +480,10 @@ class CallRecorder:
                     wav_file.setframerate(self.assistant_sample_rate)
                     wav_file.writeframes(assistant_data)
 
-                saved_path = str(filepath)
+                if not saved_path:
+                    saved_path = str(filepath)
                 logger.info(f"📁 Assistant recording saved: {filepath}")
 
-            # Save user audio separately
-            user_data = self._user_audio_buffer.getvalue()
             if user_data:
                 filename = f"{self.call_id}_{timestamp}_user.wav"
                 filepath = self.recordings_dir / filename
@@ -412,7 +496,6 @@ class CallRecorder:
 
                 logger.info(f"📁 User recording saved: {filepath}")
 
-            # Return assistant recording path (main recording)
             return saved_path
 
         except Exception as e:

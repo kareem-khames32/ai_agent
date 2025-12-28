@@ -1,10 +1,12 @@
 """
 Voice Activity Detection using Energy-based Detection
 Detects speech start/end with low latency
+Works without numpy - uses pure Python + struct
 """
-import numpy as np
+import struct
+import math
 from enum import Enum
-from typing import Optional, Callable
+from typing import Optional, Callable, List
 from dataclasses import dataclass
 import time
 
@@ -32,6 +34,79 @@ class VADEvent:
     energy: Optional[float] = None  # RMS energy level
 
 
+def bytes_to_float_samples(audio_bytes: bytes) -> List[float]:
+    """
+    Convert PCM 16-bit audio bytes to float samples [-1.0, 1.0]
+
+    Args:
+        audio_bytes: PCM 16-bit little-endian audio bytes
+
+    Returns:
+        List of float samples normalized to [-1.0, 1.0]
+    """
+    # Number of 16-bit samples
+    num_samples = len(audio_bytes) // 2
+
+    # Unpack all int16 samples at once
+    samples = struct.unpack(f'<{num_samples}h', audio_bytes)
+
+    # Convert to float and normalize
+    return [s / 32768.0 for s in samples]
+
+
+def calculate_rms(samples: List[float]) -> float:
+    """
+    Calculate Root Mean Square energy of audio samples
+
+    Args:
+        samples: List of float samples
+
+    Returns:
+        RMS energy value
+    """
+    if not samples:
+        return 0.0
+
+    # Calculate mean of squares
+    sum_squares = sum(s * s for s in samples)
+    mean_squares = sum_squares / len(samples)
+
+    # Return square root
+    return math.sqrt(mean_squares)
+
+
+def percentile(values: List[float], p: float) -> float:
+    """
+    Calculate percentile of a list of values
+
+    Args:
+        values: List of float values
+        p: Percentile (0-100)
+
+    Returns:
+        Value at the given percentile
+    """
+    if not values:
+        return 0.0
+
+    sorted_values = sorted(values)
+    n = len(sorted_values)
+
+    # Calculate index
+    k = (n - 1) * p / 100.0
+    f = math.floor(k)
+    c = math.ceil(k)
+
+    if f == c:
+        return sorted_values[int(k)]
+
+    # Linear interpolation
+    d0 = sorted_values[int(f)] * (c - k)
+    d1 = sorted_values[int(c)] * (k - f)
+
+    return d0 + d1
+
+
 class VADProcessor:
     """
     Voice Activity Detection using Energy-based Detection
@@ -44,6 +119,7 @@ class VADProcessor:
     - Adaptive threshold based on noise floor
     - Minimum speech duration filter
     - Configurable silence threshold
+    - Works without numpy (pure Python)
     """
 
     def __init__(self, config: VoiceAgentConfig):
@@ -64,16 +140,16 @@ class VADProcessor:
         self.silence_start_time: Optional[float] = None
 
         # Buffers
-        self.audio_buffer = np.array([], dtype=np.float32)
+        self.audio_buffer: List[float] = []
         self.window_size = 512  # Analysis window size (32ms at 16kHz)
-        self.energy_history: list = []
+        self.energy_history: List[float] = []
         self.max_history = 50  # Keep track of last N energy values
 
         # Callbacks
         self.on_speech_start: Optional[Callable[[], None]] = None
         self.on_speech_end: Optional[Callable[[float], None]] = None
 
-        logger.info(f"VAD initialized (threshold={config.vad_threshold}, silence={config.vad_silence_threshold_ms}ms)")
+        logger.info(f"VAD initialized (threshold={config.vad_threshold}, silence={config.vad_silence_threshold_ms}ms) [no-numpy]")
 
     def reset(self):
         """Reset VAD state"""
@@ -81,7 +157,7 @@ class VADProcessor:
         self.speech_start_time = None
         self.last_speech_time = None
         self.silence_start_time = None
-        self.audio_buffer = np.array([], dtype=np.float32)
+        self.audio_buffer = []
         self.energy_history = []
         self.adaptive_threshold = self.energy_threshold
         logger.debug("VAD reset")
@@ -96,12 +172,11 @@ class VADProcessor:
         Returns:
             VADEvent if state changed, None otherwise
         """
-        # Convert bytes to float32 numpy array
-        audio_int16 = np.frombuffer(audio_chunk, dtype=np.int16)
-        audio_float = audio_int16.astype(np.float32) / 32768.0
+        # Convert bytes to float samples
+        audio_float = bytes_to_float_samples(audio_chunk)
 
         # Add to buffer
-        self.audio_buffer = np.concatenate([self.audio_buffer, audio_float])
+        self.audio_buffer.extend(audio_float)
 
         # Process in windows
         event = None
@@ -110,7 +185,7 @@ class VADProcessor:
             self.audio_buffer = self.audio_buffer[self.window_size:]
 
             # Calculate RMS energy
-            energy = np.sqrt(np.mean(window ** 2))
+            energy = calculate_rms(window)
 
             # Update energy history for adaptive threshold
             self.energy_history.append(energy)
@@ -120,7 +195,7 @@ class VADProcessor:
             # Calculate adaptive threshold based on noise floor
             if len(self.energy_history) >= 10:
                 # Use 20th percentile as noise floor estimate
-                noise_floor = np.percentile(self.energy_history, 20)
+                noise_floor = percentile(self.energy_history, 20)
                 # Speech should be significantly above noise floor
                 self.adaptive_threshold = max(
                     self.min_energy,
