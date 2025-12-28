@@ -275,7 +275,7 @@ async def voice_agent_websocket(
                                 stt_provider=config.stt_provider,
                                 tts_provider=config.tts_provider,
                                 voice_id=config.tts_voice,
-                                language=config.language,
+                                language=config.stt_language,
                                 assistant_id=assistant_data.get("id"),
                                 assistant_name=assistant_data.get("name"),
                             )
