@@ -121,75 +121,79 @@ class CallRecorder:
     """
 
     # Cost per minute/token (accurate as of Dec 2024)
+    # Sources: Official pricing pages
     COST_RATES = {
         "stt": {
             # Per minute rates for Speech-to-Text
-            "deepgram": 0.0043,      # Nova-2 model
+            "deepgram": 0.0043,      # Nova-2 model - $0.0043/min
             "deepgram_nova": 0.0043,
-            "deepgram_enhanced": 0.0125,
-            "azure": 0.0167,         # Real-time
-            "openai": 0.006,         # Whisper API
-            "groq": 0.0007,          # Whisper-large-v3-turbo
+            "deepgram_enhanced": 0.0145, # Enhanced model
+            "azure": 0.016,          # Real-time STT
+            "openai": 0.006,         # Whisper API - $0.006/min
+            "groq": 0.000111,        # Whisper-large-v3-turbo ($0.04/hr = $0.000667/min)
             "google": 0.016,         # Cloud Speech-to-Text
-            "assemblyai": 0.00025,   # Per second = 0.015/min
-            "munsit": 0.01,
+            "assemblyai": 0.015,     # $0.00025/sec = $0.015/min
         },
         "llm": {
-            # Per 1K tokens
+            # Per 1M tokens (divide by 1000 to get per 1K)
             "openai": {
-                "gpt-4o": {"input": 0.0025, "output": 0.01},
-                "gpt-4o-mini": {"input": 0.00015, "output": 0.0006},
-                "gpt-4-turbo": {"input": 0.01, "output": 0.03},
-                "gpt-3.5-turbo": {"input": 0.0005, "output": 0.0015},
-                "default": {"input": 0.0025, "output": 0.01},
+                "gpt-4o": {"input": 2.50, "output": 10.00},            # $2.50/$10 per 1M
+                "gpt-4o-mini": {"input": 0.15, "output": 0.60},        # $0.15/$0.60 per 1M
+                "gpt-4-turbo": {"input": 10.00, "output": 30.00},
+                "gpt-3.5-turbo": {"input": 0.50, "output": 1.50},
+                "default": {"input": 2.50, "output": 10.00},
             },
             "anthropic": {
-                "claude-3-5-sonnet": {"input": 0.003, "output": 0.015},
-                "claude-3-opus": {"input": 0.015, "output": 0.075},
-                "claude-3-haiku": {"input": 0.00025, "output": 0.00125},
-                "default": {"input": 0.003, "output": 0.015},
+                "claude-3-5-sonnet": {"input": 3.00, "output": 15.00},  # $3/$15 per 1M
+                "claude-3-opus": {"input": 15.00, "output": 75.00},
+                "claude-3-haiku": {"input": 0.25, "output": 1.25},
+                "default": {"input": 3.00, "output": 15.00},
             },
             "google": {
-                "gemini-2.0-flash": {"input": 0.0, "output": 0.0},  # Free tier
-                "gemini-1.5-pro": {"input": 0.00125, "output": 0.005},
-                "gemini-1.5-flash": {"input": 0.000075, "output": 0.0003},
-                "default": {"input": 0.000125, "output": 0.0005},
+                "gemini-2.0-flash": {"input": 0.0, "output": 0.0},     # Free tier
+                "gemini-1.5-pro": {"input": 1.25, "output": 5.00},
+                "gemini-1.5-flash": {"input": 0.075, "output": 0.30},
+                "default": {"input": 0.075, "output": 0.30},
             },
             "groq": {
-                "llama-3.3-70b": {"input": 0.00059, "output": 0.00079},
-                "llama-3.1-70b": {"input": 0.00059, "output": 0.00079},
-                "llama-3.1-8b": {"input": 0.00005, "output": 0.00008},
-                "mixtral-8x7b": {"input": 0.00024, "output": 0.00024},
-                "default": {"input": 0.00059, "output": 0.00079},
+                "llama-3.3-70b": {"input": 0.59, "output": 0.79},      # $0.59/$0.79 per 1M
+                "llama-3.1-70b": {"input": 0.59, "output": 0.79},
+                "llama-3.1-8b": {"input": 0.05, "output": 0.08},
+                "mixtral-8x7b": {"input": 0.24, "output": 0.24},
+                "default": {"input": 0.59, "output": 0.79},
+            },
+            "together": {
+                "llama-3.1-70b": {"input": 0.88, "output": 0.88},
+                "default": {"input": 0.88, "output": 0.88},
             },
         },
         "tts": {
-            # Per character rates
-            "elevenlabs": 0.00018,      # ~$18/million chars
-            "elevenlabs_turbo": 0.00008,
-            "azure": 0.000016,           # Neural voices
-            "azure_hd": 0.000024,
-            "openai": 0.000015,          # TTS-1
-            "openai_hd": 0.00003,        # TTS-1-HD
-            "deepgram": 0.000015,        # Aura voices
-            "cartesia": 0.00005,
-            "google": 0.000016,
+            # Per 1M characters
+            "elevenlabs": 180.00,        # ~$0.18/1K chars = $180/1M
+            "elevenlabs_turbo": 80.00,
+            "azure": 16.00,              # Neural voices ~$16/1M
+            "azure_hd": 24.00,
+            "openai": 15.00,             # TTS-1: $15/1M chars
+            "openai_hd": 30.00,          # TTS-1-HD: $30/1M chars
+            "deepgram": 15.00,           # Aura voices
+            "cartesia": 50.00,
+            "google": 16.00,
         },
         "realtime": {
-            # Per minute audio rates for real-time APIs
+            # OpenAI Realtime API pricing (per minute)
             "openai": {
-                "input": 0.06,   # $0.06/min input audio
-                "output": 0.24,  # $0.24/min output audio
-                "text_input": 0.005,   # Per 1K tokens
-                "text_output": 0.02,
+                "audio_input": 0.06,     # $0.06/min input audio
+                "audio_output": 0.24,    # $0.24/min output audio
+                "text_input": 5.00,      # $5/1M tokens (cached: $2.50)
+                "text_output": 20.00,    # $20/1M tokens
             },
             "google": {
-                "input": 0.0,    # Gemini Live - free tier
-                "output": 0.0,
+                "audio_input": 0.0,      # Gemini Live - free tier
+                "audio_output": 0.0,
             },
             "groq": {
-                "input": 0.0007,  # Whisper for STT
-                "output": 0.00059,  # LLM cost only, TTS separate
+                "audio_input": 0.000111, # Whisper for STT
+                "llm": 0.00059,          # LLM cost per 1K tokens
             },
         }
     }
@@ -313,41 +317,51 @@ class CallRecorder:
         self._metrics.tts_latency_ms = tts_ms
 
     def _calculate_cost(self):
-        """Calculate estimated cost with model-specific rates"""
+        """Calculate estimated cost with model-specific rates
+
+        Rate formats:
+        - STT: per minute
+        - LLM: per 1M tokens
+        - TTS: per 1M characters
+        - Realtime audio: per minute
+        - Realtime text: per 1M tokens
+        """
         voice_mode = self.call_log.voice_mode
 
         if voice_mode == "realtime":
-            # Realtime API pricing (per minute)
+            # Realtime API pricing
             provider = self.call_log.realtime_provider or "openai"
-            rates = self.COST_RATES["realtime"].get(provider, {"input": 0, "output": 0})
+            rates = self.COST_RATES["realtime"].get(provider, {})
 
             input_minutes = self._metrics.user_audio_duration_sec / 60
             output_minutes = self._metrics.assistant_audio_duration_sec / 60
 
-            # Calculate audio cost
-            audio_cost = (input_minutes * rates.get("input", 0)) + (output_minutes * rates.get("output", 0))
+            # Calculate audio cost (per minute rates)
+            audio_input_rate = rates.get("audio_input", rates.get("input", 0))
+            audio_output_rate = rates.get("audio_output", rates.get("output", 0))
+            audio_cost = (input_minutes * audio_input_rate) + (output_minutes * audio_output_rate)
 
-            # Add text token cost if applicable (for realtime with text)
+            # Add text token cost if applicable (per 1M tokens)
             text_cost = 0
             if "text_input" in rates and "text_output" in rates:
                 text_cost = (
-                    (self._metrics.input_tokens / 1000) * rates["text_input"] +
-                    (self._metrics.output_tokens / 1000) * rates["text_output"]
+                    (self._metrics.input_tokens / 1_000_000) * rates["text_input"] +
+                    (self._metrics.output_tokens / 1_000_000) * rates["text_output"]
                 )
 
             self._cost.total_cost = audio_cost + text_cost
-            self._cost.stt_cost = input_minutes * rates.get("input", 0)
-            self._cost.tts_cost = output_minutes * rates.get("output", 0)
+            self._cost.stt_cost = input_minutes * audio_input_rate
+            self._cost.tts_cost = output_minutes * audio_output_rate
             self._cost.llm_cost = text_cost
         else:
             # Pipeline pricing
-            # STT cost
+            # STT cost (per minute)
             stt_provider = self.call_log.stt_provider.lower() if self.call_log.stt_provider else ""
-            stt_rate = self.COST_RATES["stt"].get(stt_provider, 0.005)
+            stt_rate = self.COST_RATES["stt"].get(stt_provider, 0.005)  # Default $0.005/min
             stt_minutes = self._metrics.user_audio_duration_sec / 60
             self._cost.stt_cost = stt_minutes * stt_rate
 
-            # LLM cost - use model-specific rates if available
+            # LLM cost (per 1M tokens)
             llm_provider = self.call_log.llm_provider.lower() if self.call_log.llm_provider else ""
             llm_model = self.call_log.llm_model.lower() if self.call_log.llm_model else ""
 
@@ -360,20 +374,23 @@ class CallRecorder:
                         llm_rates = llm_provider_rates[model_key]
                         break
                 if not llm_rates:
-                    llm_rates = llm_provider_rates.get("default", {"input": 0.002, "output": 0.01})
+                    # Default: ~$2.50/$10 per 1M tokens (GPT-4o pricing)
+                    llm_rates = llm_provider_rates.get("default", {"input": 2.50, "output": 10.00})
             else:
-                llm_rates = {"input": 0.002, "output": 0.01}
+                llm_rates = {"input": 2.50, "output": 10.00}
 
+            # Divide by 1M since rates are per 1M tokens
             self._cost.llm_cost = (
-                (self._metrics.input_tokens / 1000) * llm_rates["input"] +
-                (self._metrics.output_tokens / 1000) * llm_rates["output"]
+                (self._metrics.input_tokens / 1_000_000) * llm_rates["input"] +
+                (self._metrics.output_tokens / 1_000_000) * llm_rates["output"]
             )
 
-            # TTS cost (per character)
+            # TTS cost (per 1M characters)
             tts_provider = self.call_log.tts_provider.lower() if self.call_log.tts_provider else ""
-            tts_rate = self.COST_RATES["tts"].get(tts_provider, 0.00002)
+            tts_rate = self.COST_RATES["tts"].get(tts_provider, 15.00)  # Default $15/1M chars (OpenAI)
             total_chars = sum(len(t.text) for t in self._transcripts if t.role == "assistant")
-            self._cost.tts_cost = total_chars * tts_rate
+            # Divide by 1M since rates are per 1M characters
+            self._cost.tts_cost = (total_chars / 1_000_000) * tts_rate
 
             self._cost.total_cost = self._cost.stt_cost + self._cost.llm_cost + self._cost.tts_cost
 
