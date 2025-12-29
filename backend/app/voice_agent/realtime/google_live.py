@@ -36,7 +36,16 @@ class GoogleGeminiLiveAgent:
     """
 
     # Gemini Live uses WebSocket for streaming
-    LIVE_URL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent"
+    # Use v1beta for Live API support
+    LIVE_URL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+
+    # Models that support Live API (bidiGenerateContent)
+    # Note: Thinking models do NOT support Live API
+    SUPPORTED_MODELS = [
+        "gemini-2.0-flash-exp",
+        "gemini-2.0-flash-live-001",
+        "gemini-2.5-flash-preview-native-audio",
+    ]
 
     def __init__(
         self,
@@ -82,10 +91,20 @@ class GoogleGeminiLiveAgent:
 
             self.state = GeminiLiveState.CONNECTING
 
+            # Validate model - thinking models don't support Live API
+            if "thinking" in self.model.lower():
+                logger.warning(f"⚠️ Model {self.model} does not support Live API. Using gemini-2.0-flash-exp instead.")
+                self.model = "gemini-2.0-flash-exp"
+
+            # Check if model is in supported list
+            model_supported = any(supported in self.model for supported in self.SUPPORTED_MODELS)
+            if not model_supported:
+                logger.warning(f"⚠️ Model {self.model} may not support Live API. Trying anyway...")
+
             # Build WebSocket URL with API key
             url = f"{self.LIVE_URL}?key={self.api_key}"
 
-            logger.info(f"🔌 Connecting to Gemini Live API...")
+            logger.info(f"🔌 Connecting to Gemini Live API (model={self.model})...")
             self._ws = await websockets.connect(url)
 
             # Send setup message

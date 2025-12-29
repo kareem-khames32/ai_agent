@@ -213,16 +213,17 @@ class CallRecorder:
                 "text_input": 5.00,      # $5/1M tokens (cached: $2.50)
                 "text_output": 20.00,    # $20/1M tokens
             },
-            # Gemini Live API - Multiple models
+            # Gemini Live API - Models that support bidiGenerateContent
             # Source: https://cloud.google.com/vertex-ai/generative-ai/pricing
             # Audio: 25 tokens/second = 1500 tokens/minute
+            # NOTE: Thinking models do NOT support Live API
             "google": {
                 "models": {
                     "gemini-2.0-flash-exp": {
                         "audio_input": 0.0045,   # $3/1M tokens @ 25 tok/sec
                         "audio_output": 0.018,   # $12/1M tokens @ 25 tok/sec
                     },
-                    "gemini-2.0-flash-thinking-exp": {
+                    "gemini-2.0-flash-live-001": {
                         "audio_input": 0.0045,
                         "audio_output": 0.018,
                     },
