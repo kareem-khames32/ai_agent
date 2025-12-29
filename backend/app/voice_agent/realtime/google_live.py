@@ -41,10 +41,10 @@ class GoogleGeminiLiveAgent:
 
     # Models that support Live API (bidiGenerateContent)
     # Note: Thinking models do NOT support Live API
+    # Note: Model names must be exact - check Google AI Studio
     SUPPORTED_MODELS = [
-        "gemini-2.0-flash-exp",
-        "gemini-2.0-flash-live-001",
-        "gemini-2.5-flash-preview-native-audio",
+        "gemini-2.0-flash-exp",      # Experimental - working
+        "gemini-2.0-flash",           # Stable alias
     ]
 
     def __init__(

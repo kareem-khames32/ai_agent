@@ -61,9 +61,8 @@ const realtimeModelsByProvider: Record<string, { value: string; label: string; d
     { value: "gpt-4o-mini-realtime-preview", label: "GPT-4o Mini Realtime", description: "Cheapest - $0.018/min" },
   ],
   google: [
-    { value: "gemini-2.0-flash-exp", label: "Gemini 2.0 Flash", description: "Best for Live - $0.0225/min" },
-    { value: "gemini-2.0-flash-live-001", label: "Gemini 2.0 Flash Live", description: "Optimized for Live API" },
-    { value: "gemini-2.5-flash-preview-native-audio", label: "Gemini 2.5 Flash Native Audio", description: "Newest - 30 HD voices" },
+    { value: "gemini-2.0-flash-exp", label: "Gemini 2.0 Flash (Exp)", description: "Best for Live - $0.0225/min" },
+    { value: "gemini-2.0-flash", label: "Gemini 2.0 Flash", description: "Stable version - $0.0225/min" },
     // NOTE: Thinking models do NOT support Live API
   ],
   groq: [
