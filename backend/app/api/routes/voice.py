@@ -16,7 +16,7 @@ from starlette.websockets import WebSocketState
 from loguru import logger
 
 from app.voice_agent import VoiceAgent, VoiceAgentConfig, get_config, create_config_from_assistant, AgentState
-from app.voice_agent.realtime import OpenAIRealtimeAgent, GoogleGeminiLiveAgent, GroqFastAgent
+from app.voice_agent.realtime import OpenAIRealtimeAgent, GoogleGeminiLiveAgent, GroqFastAgent, ElevenLabsConversationalAgent
 from app.voice_agent.call_recorder import CallRecorder, call_log_storage
 
 
@@ -90,7 +90,7 @@ async def voice_agent_websocket(
 
     is_connected = True
     voice_mode = "pipeline"
-    agent: Optional[Union[VoiceAgent, OpenAIRealtimeAgent, GoogleGeminiLiveAgent, GroqFastAgent]] = None
+    agent: Optional[Union[VoiceAgent, OpenAIRealtimeAgent, GoogleGeminiLiveAgent, GroqFastAgent, ElevenLabsConversationalAgent]] = None
 
     # Initialize call recorder
     recorder = CallRecorder(call_id)
@@ -512,7 +512,7 @@ async def _create_realtime_agent(
     call_id: str,
     language: str = "ar",
     max_tokens: int = 200,
-) -> Optional[Union[OpenAIRealtimeAgent, GoogleGeminiLiveAgent, GroqFastAgent]]:
+) -> Optional[Union[OpenAIRealtimeAgent, GoogleGeminiLiveAgent, GroqFastAgent, ElevenLabsConversationalAgent]]:
     """Create the appropriate realtime agent based on provider"""
 
     logger.debug(f"Creating realtime agent: provider={provider}, language={language}, max_tokens={max_tokens}")
@@ -569,6 +569,29 @@ async def _create_realtime_agent(
             tts_api_key=tts_api_key,
             language=language,
             max_tokens=max_tokens,
+        )
+
+    elif provider == "elevenlabs":
+        api_key = _get_api_key(credentials, "elevenlabs", "ELEVENLABS_API_KEY")
+        if not api_key:
+            logger.error("ElevenLabs API key not found")
+            return None
+
+        # ElevenLabs requires an agent_id (pre-configured in their dashboard)
+        # For now, use the model parameter as agent_id or use a default
+        agent_id = model if model and len(model) > 20 else os.getenv("ELEVENLABS_AGENT_ID", "")
+        if not agent_id:
+            logger.error("ElevenLabs agent_id not configured. Create an agent at elevenlabs.io/conversational-ai")
+            return None
+
+        logger.info(f"🔗 Creating ElevenLabs Conversational agent with agent_id: {agent_id[:20]}...")
+        return ElevenLabsConversationalAgent(
+            api_key=api_key,
+            agent_id=agent_id,
+            voice_id=voice or "21m00Tcm4TlvDq8ikWAM",  # Rachel voice
+            system_prompt=system_prompt,
+            call_id=call_id,
+            language=language,
         )
 
     else:

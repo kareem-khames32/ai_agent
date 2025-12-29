@@ -120,7 +120,7 @@ class CallRecorder:
     - Saves call logs
     """
 
-    # Cost per minute/token (accurate as of Dec 2024)
+    # Cost per minute/token (accurate as of Dec 2024/Jan 2025)
     # Sources: Official pricing pages
     COST_RATES = {
         "stt": {
@@ -130,12 +130,12 @@ class CallRecorder:
             "deepgram_enhanced": 0.0145, # Enhanced model
             "azure": 0.016,          # Real-time STT
             "openai": 0.006,         # Whisper API - $0.006/min
-            "groq": 0.000111,        # Whisper-large-v3-turbo ($0.04/hr = $0.000667/min)
+            "groq": 0.000667,        # Whisper-large-v3-turbo ($0.04/hr = $0.000667/min)
             "google": 0.016,         # Cloud Speech-to-Text
             "assemblyai": 0.015,     # $0.00025/sec = $0.015/min
         },
         "llm": {
-            # Per 1M tokens (divide by 1000 to get per 1K)
+            # Per 1M tokens
             "openai": {
                 "gpt-4o": {"input": 2.50, "output": 10.00},            # $2.50/$10 per 1M
                 "gpt-4o-mini": {"input": 0.15, "output": 0.60},        # $0.15/$0.60 per 1M
@@ -150,10 +150,11 @@ class CallRecorder:
                 "default": {"input": 3.00, "output": 15.00},
             },
             "google": {
-                "gemini-2.0-flash": {"input": 0.0, "output": 0.0},     # Free tier
+                "gemini-2.0-flash": {"input": 0.10, "output": 0.40},   # $0.10/$0.40 per 1M
+                "gemini-2.5-flash": {"input": 0.15, "output": 0.60},
                 "gemini-1.5-pro": {"input": 1.25, "output": 5.00},
                 "gemini-1.5-flash": {"input": 0.075, "output": 0.30},
-                "default": {"input": 0.075, "output": 0.30},
+                "default": {"input": 0.10, "output": 0.40},
             },
             "groq": {
                 "llama-3.3-70b": {"input": 0.59, "output": 0.79},      # $0.59/$0.79 per 1M
@@ -180,32 +181,76 @@ class CallRecorder:
             "google": 16.00,
         },
         "realtime": {
-            # OpenAI Realtime API pricing
+            # OpenAI Realtime API - Multiple models
             # Source: https://openai.com/api/pricing/
+            # gpt-4o-realtime-preview: $100/$200 per 1M audio tokens
+            # gpt-realtime (GA): $32/$64 per 1M audio tokens (20% cheaper)
+            # gpt-4o-mini-realtime: $10/$20 per 1M audio tokens
+            # Audio tokens ≈ 1666 tokens/min input, 1250 tokens/min output
             "openai": {
-                "audio_input": 0.06,     # $0.06/min input audio (~$100/1M tokens)
-                "audio_output": 0.24,    # $0.24/min output audio (~$200/1M tokens)
+                # Model-specific rates (per minute)
+                "models": {
+                    "gpt-4o-realtime-preview": {
+                        "audio_input": 0.06,     # $100/1M tokens
+                        "audio_output": 0.24,    # $200/1M tokens
+                    },
+                    "gpt-4o-realtime-preview-2024-12-17": {
+                        "audio_input": 0.06,
+                        "audio_output": 0.24,
+                    },
+                    "gpt-realtime": {            # GA model - 20% cheaper
+                        "audio_input": 0.019,    # $32/1M tokens
+                        "audio_output": 0.038,   # $64/1M tokens
+                    },
+                    "gpt-4o-mini-realtime-preview": {
+                        "audio_input": 0.006,    # $10/1M tokens
+                        "audio_output": 0.012,   # $20/1M tokens
+                    },
+                },
+                # Default rates (gpt-4o-realtime-preview)
+                "audio_input": 0.06,
+                "audio_output": 0.24,
                 "text_input": 5.00,      # $5/1M tokens (cached: $2.50)
                 "text_output": 20.00,    # $20/1M tokens
             },
-            # Gemini 2.0 Flash Live API pricing
+            # Gemini Live API - Multiple models
             # Source: https://cloud.google.com/vertex-ai/generative-ai/pricing
-            # Audio: 25 tokens/second, so 1500 tokens/minute
-            # Input: $3/1M tokens = (1500/1M)*3 = $0.0045/min
-            # Output: $12/1M tokens = (1500/1M)*12 = $0.018/min
+            # Audio: 25 tokens/second = 1500 tokens/minute
             "google": {
-                "audio_input": 0.0045,   # $3/1M tokens @ 25 tok/sec
-                "audio_output": 0.018,   # $12/1M tokens @ 25 tok/sec
+                "models": {
+                    "gemini-2.0-flash-exp": {
+                        "audio_input": 0.0045,   # $3/1M tokens @ 25 tok/sec
+                        "audio_output": 0.018,   # $12/1M tokens @ 25 tok/sec
+                    },
+                    "gemini-2.0-flash-thinking-exp": {
+                        "audio_input": 0.0045,
+                        "audio_output": 0.018,
+                    },
+                    "gemini-2.5-flash-preview-native-audio": {
+                        "audio_input": 0.0045,
+                        "audio_output": 0.018,
+                    },
+                },
+                "audio_input": 0.0045,
+                "audio_output": 0.018,
             },
             "gemini": {
-                "audio_input": 0.0045,   # $3/1M tokens @ 25 tok/sec
-                "audio_output": 0.018,   # $12/1M tokens @ 25 tok/sec
+                "audio_input": 0.0045,
+                "audio_output": 0.018,
             },
-            # Groq uses pipeline (Whisper STT + LLM + TTS) - not native realtime
-            # But when used in "realtime" mode, calculate as pipeline
+            # ElevenLabs Conversational AI
+            # Source: https://elevenlabs.io/pricing/api
+            # Flat rate per minute (includes STT + LLM orchestration + TTS)
+            "elevenlabs": {
+                "per_minute": 0.08,      # $0.08/min (Business plan)
+                "audio_input": 0.04,     # Estimated split
+                "audio_output": 0.04,
+            },
+            # Groq uses pipeline (Whisper STT + LLM + external TTS)
+            # Not native realtime, but fast pipeline
             "groq": {
                 "audio_input": 0.000667,  # Whisper $0.04/hr = $0.000667/min
-                "audio_output": 0.0,      # No native audio output
+                "audio_output": 0.0,      # Uses external TTS
                 "llm_per_1m": 0.59,       # Llama 70B ~$0.59/1M tokens
             },
         }
@@ -344,28 +389,50 @@ class CallRecorder:
         if voice_mode == "realtime":
             # Realtime API pricing
             provider = (self.call_log.realtime_provider or "openai").lower()
-            rates = self.COST_RATES["realtime"].get(provider, {})
+            provider_rates = self.COST_RATES["realtime"].get(provider, {})
 
             input_minutes = self._metrics.user_audio_duration_sec / 60
             output_minutes = self._metrics.assistant_audio_duration_sec / 60
 
-            # Calculate audio cost (per minute rates)
-            audio_input_rate = rates.get("audio_input", 0)
-            audio_output_rate = rates.get("audio_output", 0)
-            audio_cost = (input_minutes * audio_input_rate) + (output_minutes * audio_output_rate)
+            # Check for model-specific rates
+            model = self.call_log.llm_model.lower() if self.call_log.llm_model else ""
+            model_rates = None
+            if "models" in provider_rates:
+                for model_key, rates in provider_rates["models"].items():
+                    if model_key.lower() in model or model in model_key.lower():
+                        model_rates = rates
+                        break
+
+            # Use model-specific rates or fall back to provider defaults
+            if model_rates:
+                audio_input_rate = model_rates.get("audio_input", 0)
+                audio_output_rate = model_rates.get("audio_output", 0)
+            else:
+                audio_input_rate = provider_rates.get("audio_input", 0)
+                audio_output_rate = provider_rates.get("audio_output", 0)
+
+            # Check for ElevenLabs flat rate
+            if "per_minute" in provider_rates:
+                # ElevenLabs charges flat rate per minute
+                total_minutes = input_minutes + output_minutes
+                audio_cost = total_minutes * provider_rates["per_minute"]
+                audio_input_rate = provider_rates["per_minute"] / 2
+                audio_output_rate = provider_rates["per_minute"] / 2
+            else:
+                audio_cost = (input_minutes * audio_input_rate) + (output_minutes * audio_output_rate)
 
             # Add text/LLM token cost if applicable
             text_cost = 0
-            if "text_input" in rates and "text_output" in rates:
+            if "text_input" in provider_rates and "text_output" in provider_rates:
                 # OpenAI Realtime style (per 1M tokens for text)
                 text_cost = (
-                    (self._metrics.input_tokens / 1_000_000) * rates["text_input"] +
-                    (self._metrics.output_tokens / 1_000_000) * rates["text_output"]
+                    (self._metrics.input_tokens / 1_000_000) * provider_rates["text_input"] +
+                    (self._metrics.output_tokens / 1_000_000) * provider_rates["text_output"]
                 )
-            elif "llm_per_1m" in rates:
+            elif "llm_per_1m" in provider_rates:
                 # Groq style (single rate per 1M tokens)
                 total_tokens = self._metrics.input_tokens + self._metrics.output_tokens
-                text_cost = (total_tokens / 1_000_000) * rates["llm_per_1m"]
+                text_cost = (total_tokens / 1_000_000) * provider_rates["llm_per_1m"]
 
             self._cost.total_cost = audio_cost + text_cost
             self._cost.stt_cost = input_minutes * audio_input_rate
