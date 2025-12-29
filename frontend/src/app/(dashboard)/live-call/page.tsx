@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import { Select } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import {
   Mic,
   MicOff,
@@ -26,7 +27,13 @@ import {
   DollarSign,
   Zap,
   MessageSquare,
+  Sparkles,
 } from "lucide-react";
+import {
+  GeminiLiveService,
+  createGeminiLiveService,
+  ARABIC_VOICE_SYSTEM_PROMPT,
+} from "@/lib/geminiLiveService";
 
 interface TranscriptEntry {
   role: "user" | "assistant";
@@ -70,6 +77,10 @@ interface Assistant {
   temperature?: number;
   max_tokens?: number;
   stop_speaking_plan?: StopSpeakingPlan;
+  voice_mode?: string;
+  realtime_provider?: string;
+  realtime_model?: string;
+  realtime_voice?: string;
 }
 
 type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
@@ -80,8 +91,21 @@ const DEFAULT_PROMPT = `أنت مساعد صوتي ذكي.
 كن مهذباً ومحترفاً.
 ردودك يجب أن تكون مختصرة ومباشرة (جملة أو جملتين فقط).`;
 
-// Default assistants for testing (in real app, fetch from API)
+// Default assistants for testing
 const DEFAULT_ASSISTANTS: Assistant[] = [
+  {
+    id: "gemini-direct",
+    name: "Gemini مباشر (سريع جداً)",
+    system_prompt: ARABIC_VOICE_SYSTEM_PROMPT,
+    model_provider: "google",
+    model_name: "gemini-2.0-flash-exp",
+    voice_provider: "google",
+    voice_id: "Kore",
+    transcriber_provider: "google",
+    transcriber_language: "ar",
+    voice_mode: "realtime",
+    realtime_provider: "google",
+  },
   {
     id: "default",
     name: "المساعد الافتراضي",
@@ -107,20 +131,6 @@ const DEFAULT_ASSISTANTS: Assistant[] = [
     transcriber_provider: "deepgram",
     transcriber_language: "ar",
   },
-  {
-    id: "sales-agent",
-    name: "وكيل المبيعات",
-    system_prompt: `أنت وكيل مبيعات ذكي.
-تتحدث العربية بطلاقة.
-ساعد العميل في اختيار المنتجات المناسبة.
-كن ودوداً ومقنعاً.`,
-    model_provider: "anthropic",
-    model_name: "claude-3-5-sonnet-20241022",
-    voice_provider: "azure",
-    voice_id: "ar-SA-HamedNeural",
-    transcriber_provider: "azure",
-    transcriber_language: "ar-SA",
-  },
 ];
 
 export default function LiveCallPage() {
@@ -137,25 +147,30 @@ export default function LiveCallPage() {
   const [isSpeakerMuted, setIsSpeakerMuted] = React.useState(false);
   const [callId, setCallId] = React.useState<string | null>(null);
 
+  // Direct Gemini mode
+  const [useDirectGemini, setUseDirectGemini] = React.useState(false);
+  const geminiServiceRef = React.useRef<GeminiLiveService | null>(null);
+
   // Assistant selection
   const [assistants, setAssistants] = React.useState<Assistant[]>(DEFAULT_ASSISTANTS);
-  const [selectedAssistantId, setSelectedAssistantId] = React.useState<string>("default");
+  const [selectedAssistantId, setSelectedAssistantId] = React.useState<string>("gemini-direct");
   const selectedAssistant = assistants.find(a => a.id === selectedAssistantId) || assistants[0];
 
   // Prompt (from selected assistant)
-  const [systemPrompt, setSystemPrompt] = React.useState(DEFAULT_PROMPT);
+  const [systemPrompt, setSystemPrompt] = React.useState(ARABIC_VOICE_SYSTEM_PROMPT);
+
+  // Call start time for duration tracking
+  const callStartTimeRef = React.useRef<number>(0);
 
   // Load assistant from URL params / localStorage
   React.useEffect(() => {
     const assistantId = searchParams.get("assistant");
     if (assistantId) {
-      // Try to load from test_assistant in localStorage
       try {
         const saved = localStorage.getItem("test_assistant");
         if (saved) {
           const testAssistant = JSON.parse(saved);
           if (testAssistant.id === assistantId || testAssistant) {
-            // Create assistant object from saved data
             const loadedAssistant: Assistant = {
               id: testAssistant.id || assistantId,
               name: testAssistant.name || "وكيل محمل",
@@ -168,30 +183,24 @@ export default function LiveCallPage() {
               transcriber_language: testAssistant.transcriber_language || testAssistant.transcriberLanguage || "ar",
               temperature: testAssistant.temperature || 0.7,
               max_tokens: testAssistant.max_tokens || testAssistant.maxTokens || 1024,
-              // Load stop_speaking_plan (barge-in settings)
               stop_speaking_plan: testAssistant.stop_speaking_plan || testAssistant.stopSpeakingPlan || {
                 enable_interruption: true,
                 interruption_words: 2,
               },
-              // Load voice mode settings
               voice_mode: testAssistant.voice_mode || "pipeline",
               realtime_provider: testAssistant.realtime_provider || "openai",
               realtime_model: testAssistant.realtime_model || "gpt-4o-realtime-preview",
               realtime_voice: testAssistant.realtime_voice || "alloy",
             };
 
-            // Add to assistants list if not already there
             setAssistants(prev => {
               const exists = prev.find(a => a.id === loadedAssistant.id);
               if (exists) return prev;
               return [loadedAssistant, ...prev];
             });
 
-            // Select this assistant
             setSelectedAssistantId(loadedAssistant.id);
             setSystemPrompt(loadedAssistant.system_prompt);
-
-            console.log("📋 Loaded assistant from localStorage:", loadedAssistant);
           }
         }
       } catch (e) {
@@ -204,6 +213,10 @@ export default function LiveCallPage() {
   React.useEffect(() => {
     if (selectedAssistant) {
       setSystemPrompt(selectedAssistant.system_prompt);
+      // Auto-enable direct Gemini for gemini-direct assistant
+      if (selectedAssistant.id === "gemini-direct") {
+        setUseDirectGemini(true);
+      }
     }
   }, [selectedAssistant]);
 
@@ -214,7 +227,7 @@ export default function LiveCallPage() {
   // Live metrics
   const [liveMetrics, setLiveMetrics] = React.useState<LiveMetrics | null>(null);
 
-  // Refs
+  // Refs for backend WebSocket mode
   const wsRef = React.useRef<WebSocket | null>(null);
   const audioContextRef = React.useRef<AudioContext | null>(null);
   const mediaStreamRef = React.useRef<MediaStream | null>(null);
@@ -223,6 +236,9 @@ export default function LiveCallPage() {
   const audioQueueRef = React.useRef<Float32Array[]>([]);
   const isPlayingRef = React.useRef(false);
   const nextPlayTimeRef = React.useRef(0);
+
+  // Duration timer
+  const durationIntervalRef = React.useRef<NodeJS.Timeout | null>(null);
 
   // Set mounted on client
   React.useEffect(() => {
@@ -241,8 +257,142 @@ export default function LiveCallPage() {
     };
   }, []);
 
-  // Connect to WebSocket
+  // Start duration timer
+  const startDurationTimer = () => {
+    callStartTimeRef.current = Date.now();
+    durationIntervalRef.current = setInterval(() => {
+      const durationSec = (Date.now() - callStartTimeRef.current) / 1000;
+      setLiveMetrics(prev => ({
+        ...prev,
+        durationSec,
+        responseCount: prev?.responseCount || 0,
+        avgLatencyMs: prev?.avgLatencyMs || 0,
+        lastLatencyMs: prev?.lastLatencyMs || 0,
+        cost: prev?.cost || { total: 0, stt: 0, llm: 0, tts: 0 },
+        tokens: prev?.tokens || { input: 0, output: 0 },
+      }));
+    }, 1000);
+  };
+
+  // Stop duration timer
+  const stopDurationTimer = () => {
+    if (durationIntervalRef.current) {
+      clearInterval(durationIntervalRef.current);
+      durationIntervalRef.current = null;
+    }
+  };
+
+  // Connect - choose between direct Gemini or backend WebSocket
   const connect = async () => {
+    if (useDirectGemini) {
+      await connectDirectGemini();
+    } else {
+      await connectBackendWebSocket();
+    }
+  };
+
+  // Connect directly to Gemini Live API
+  const connectDirectGemini = async () => {
+    setStatus("connecting");
+
+    try {
+      // Get Google API key from localStorage
+      let googleApiKey = "";
+      try {
+        const saved = localStorage.getItem("provider_credentials");
+        if (saved) {
+          const credentials = JSON.parse(saved);
+          googleApiKey = credentials.google?.api_key || "";
+        }
+      } catch (e) {
+        console.error("Failed to load credentials:", e);
+      }
+
+      if (!googleApiKey) {
+        throw new Error("Google API Key غير موجود. اذهب للإعدادات وأضف الـ API Key.");
+      }
+
+      // Create Gemini Live service
+      geminiServiceRef.current = createGeminiLiveService(
+        {
+          apiKey: googleApiKey,
+          model: "gemini-2.0-flash-exp",
+          voiceName: "Kore",
+          language: "ar",
+          systemPrompt: systemPrompt,
+          temperature: 0.7,
+        },
+        {
+          onReady: () => {
+            setStatus("connected");
+            setCallId("gemini-" + Date.now().toString(36));
+            startDurationTimer();
+            addToast({
+              type: "success",
+              title: "متصل بـ Gemini!",
+              description: "اتصال مباشر - أقل زمن استجابة",
+            });
+          },
+          onStateChange: (state) => {
+            setAgentState(state);
+          },
+          onUserTranscript: (text) => {
+            setTranscript(prev => [
+              ...prev,
+              {
+                role: "user",
+                text,
+                timestamp: new Date(),
+                isFinal: true,
+              },
+            ]);
+            setInterimText("");
+          },
+          onAssistantTranscript: (text) => {
+            setTranscript(prev => [
+              ...prev,
+              {
+                role: "assistant",
+                text,
+                timestamp: new Date(),
+                isFinal: true,
+              },
+            ]);
+            // Update response count
+            setLiveMetrics(prev => ({
+              ...prev!,
+              responseCount: (prev?.responseCount || 0) + 1,
+            }));
+          },
+          onError: (error) => {
+            addToast({
+              type: "error",
+              title: "خطأ",
+              description: error,
+            });
+          },
+          onDisconnect: () => {
+            setStatus("disconnected");
+            stopDurationTimer();
+          },
+        }
+      );
+
+      await geminiServiceRef.current.connect();
+
+    } catch (error: any) {
+      console.error("Direct Gemini connection error:", error);
+      setStatus("error");
+      addToast({
+        type: "error",
+        title: "خطأ في الاتصال",
+        description: error.message || "فشل الاتصال بـ Gemini",
+      });
+    }
+  };
+
+  // Connect via backend WebSocket
+  const connectBackendWebSocket = async () => {
     setStatus("connecting");
 
     try {
@@ -296,12 +446,10 @@ export default function LiveCallPage() {
               transcriber_language: selectedAssistant.transcriber_language,
               temperature: selectedAssistant.temperature || 0.7,
               max_tokens: selectedAssistant.max_tokens || 200,
-              // Barge-in (interruption) settings
               stop_speaking_plan: selectedAssistant.stop_speaking_plan || {
                 enable_interruption: true,
                 interruption_words: 2,
               },
-              // Voice mode settings
               voice_mode: selectedAssistant.voice_mode || "pipeline",
               realtime_provider: selectedAssistant.realtime_provider || "openai",
               realtime_model: selectedAssistant.realtime_model || "gpt-4o-realtime-preview",
@@ -315,7 +463,7 @@ export default function LiveCallPage() {
       ws.onmessage = async (event) => {
         try {
           const message = JSON.parse(event.data);
-          handleMessage(message);
+          handleBackendMessage(message);
         } catch (e) {
           console.error("Error parsing message:", e);
         }
@@ -335,6 +483,7 @@ export default function LiveCallPage() {
         console.log("WebSocket closed");
         setStatus("disconnected");
         stopAudioCapture();
+        stopDurationTimer();
       };
     } catch (error) {
       console.error("Connection error:", error);
@@ -347,13 +496,14 @@ export default function LiveCallPage() {
     }
   };
 
-  // Handle incoming messages
-  const handleMessage = (message: any) => {
+  // Handle incoming messages from backend
+  const handleBackendMessage = (message: any) => {
     switch (message.type) {
       case "ready":
         setStatus("connected");
         setCallId(message.call_id);
         startAudioCapture();
+        startDurationTimer();
         addToast({
           type: "success",
           title: "متصل!",
@@ -366,7 +516,18 @@ export default function LiveCallPage() {
         break;
 
       case "transcript":
-        if (message.is_final) {
+        if (message.role === "assistant") {
+          // Realtime mode sends role
+          setTranscript((prev) => [
+            ...prev,
+            {
+              role: "assistant",
+              text: message.text,
+              timestamp: new Date(),
+              isFinal: true,
+            },
+          ]);
+        } else if (message.is_final) {
           setTranscript((prev) => [
             ...prev,
             {
@@ -425,14 +586,12 @@ export default function LiveCallPage() {
     }
   };
 
-  // Start capturing audio from microphone
+  // Start capturing audio from microphone (for backend mode)
   const startAudioCapture = () => {
     if (!mediaStreamRef.current || !audioContextRef.current) return;
 
     const audioContext = audioContextRef.current;
     const source = audioContext.createMediaStreamSource(mediaStreamRef.current);
-
-    // Use ScriptProcessor for audio capture (deprecated but widely supported)
     const processor = audioContext.createScriptProcessor(4096, 1, 1);
     processorRef.current = processor;
 
@@ -441,10 +600,7 @@ export default function LiveCallPage() {
         return;
       }
 
-      // Get audio data
       const inputData = e.inputBuffer.getChannelData(0);
-
-      // Resample from AudioContext sample rate to 16000
       const targetSampleRate = 16000;
       const ratio = audioContext.sampleRate / targetSampleRate;
       const newLength = Math.round(inputData.length / ratio);
@@ -455,14 +611,12 @@ export default function LiveCallPage() {
         resampledData[i] = inputData[srcIndex] || 0;
       }
 
-      // Convert to 16-bit PCM
       const pcmData = new Int16Array(resampledData.length);
       for (let i = 0; i < resampledData.length; i++) {
         const s = Math.max(-1, Math.min(1, resampledData[i]));
         pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
       }
 
-      // Send as base64
       const base64 = arrayBufferToBase64(pcmData.buffer);
       wsRef.current.send(
         JSON.stringify({
@@ -474,8 +628,6 @@ export default function LiveCallPage() {
 
     source.connect(processor);
     processor.connect(audioContext.destination);
-
-    console.log("Audio capture started");
   };
 
   // Stop audio capture
@@ -496,26 +648,23 @@ export default function LiveCallPage() {
     }
   };
 
-  // Play received audio with proper queuing
+  // Play received audio
   const playAudio = async (base64Audio: string) => {
     if (!audioContextRef.current) return;
 
     try {
-      // Decode base64 to PCM
       const binaryString = atob(base64Audio);
       const bytes = new Uint8Array(binaryString.length);
       for (let i = 0; i < binaryString.length; i++) {
         bytes[i] = binaryString.charCodeAt(i);
       }
 
-      // Convert to Float32 for Web Audio API
       const pcmData = new Int16Array(bytes.buffer);
       const floatData = new Float32Array(pcmData.length);
       for (let i = 0; i < pcmData.length; i++) {
         floatData[i] = pcmData[i] / 32768;
       }
 
-      // Create audio buffer
       const audioBuffer = audioContextRef.current.createBuffer(
         1,
         floatData.length,
@@ -523,17 +672,14 @@ export default function LiveCallPage() {
       );
       audioBuffer.getChannelData(0).set(floatData);
 
-      // Schedule audio to play in sequence (not overlapping)
       const currentTime = audioContextRef.current.currentTime;
       const startTime = Math.max(currentTime, nextPlayTimeRef.current);
 
-      // Create and play source
       const source = audioContextRef.current.createBufferSource();
       source.buffer = audioBuffer;
       source.connect(audioContextRef.current.destination);
       source.start(startTime);
 
-      // Update next play time (add buffer duration)
       nextPlayTimeRef.current = startTime + audioBuffer.duration;
 
     } catch (error) {
@@ -543,6 +689,13 @@ export default function LiveCallPage() {
 
   // Disconnect
   const disconnect = () => {
+    // Disconnect Gemini if using direct mode
+    if (geminiServiceRef.current) {
+      geminiServiceRef.current.disconnect();
+      geminiServiceRef.current = null;
+    }
+
+    // Disconnect backend WebSocket
     if (wsRef.current) {
       wsRef.current.send(JSON.stringify({ type: "stop" }));
       wsRef.current.close();
@@ -550,6 +703,7 @@ export default function LiveCallPage() {
     }
 
     stopAudioCapture();
+    stopDurationTimer();
     setStatus("disconnected");
     setAgentState("idle");
     setCallId(null);
@@ -629,12 +783,20 @@ export default function LiveCallPage() {
         <div>
           <h2 className="text-2xl font-bold">مكالمة صوتية مباشرة</h2>
           <p className="text-[var(--muted-foreground)]">
-            محادثة صوتية فورية مع الذكاء الاصطناعي
+            {useDirectGemini
+              ? "اتصال مباشر بـ Gemini - أسرع استجابة!"
+              : "محادثة صوتية عبر الخادم"}
           </p>
         </div>
 
         <div className="flex items-center gap-2">
           {getStateBadge()}
+          {useDirectGemini && status === "connected" && (
+            <Badge variant="outline" className="bg-gradient-to-r from-blue-500/10 to-purple-500/10">
+              <Sparkles className="h-3 w-3 mr-1 text-purple-500" />
+              Gemini Direct
+            </Badge>
+          )}
           <Badge
             variant={
               status === "connected"
@@ -667,12 +829,11 @@ export default function LiveCallPage() {
         </div>
       </div>
 
-      {/* Live Metrics Panel - Shows during call */}
+      {/* Live Metrics Panel */}
       {status === "connected" && liveMetrics && (
         <Card className="bg-gradient-to-r from-[var(--card)] to-[var(--muted)]">
           <CardContent className="py-4">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              {/* Duration */}
               <div className="flex items-center gap-3">
                 <div className="p-2 rounded-lg bg-blue-500/10">
                   <Clock className="h-5 w-5 text-blue-500" />
@@ -685,7 +846,6 @@ export default function LiveCallPage() {
                 </div>
               </div>
 
-              {/* Latency */}
               <div className="flex items-center gap-3">
                 <div className="p-2 rounded-lg bg-yellow-500/10">
                   <Zap className="h-5 w-5 text-yellow-500" />
@@ -693,17 +853,11 @@ export default function LiveCallPage() {
                 <div>
                   <p className="text-xs text-[var(--muted-foreground)]">زمن الاستجابة</p>
                   <p className="text-lg font-semibold">
-                    {liveMetrics.lastLatencyMs > 0 ? `${liveMetrics.lastLatencyMs}ms` : '-'}
+                    {useDirectGemini ? "~300ms" : (liveMetrics.lastLatencyMs > 0 ? `${liveMetrics.lastLatencyMs}ms` : '-')}
                   </p>
-                  {liveMetrics.avgLatencyMs > 0 && (
-                    <p className="text-xs text-[var(--muted-foreground)]">
-                      متوسط: {liveMetrics.avgLatencyMs}ms
-                    </p>
-                  )}
                 </div>
               </div>
 
-              {/* Cost */}
               <div className="flex items-center gap-3">
                 <div className="p-2 rounded-lg bg-green-500/10">
                   <DollarSign className="h-5 w-5 text-green-500" />
@@ -716,7 +870,6 @@ export default function LiveCallPage() {
                 </div>
               </div>
 
-              {/* Responses */}
               <div className="flex items-center gap-3">
                 <div className="p-2 rounded-lg bg-purple-500/10">
                   <MessageSquare className="h-5 w-5 text-purple-500" />
@@ -724,11 +877,6 @@ export default function LiveCallPage() {
                 <div>
                   <p className="text-xs text-[var(--muted-foreground)]">الردود</p>
                   <p className="text-lg font-semibold">{liveMetrics.responseCount}</p>
-                  {liveMetrics.tokens.output > 0 && (
-                    <p className="text-xs text-[var(--muted-foreground)]">
-                      {liveMetrics.tokens.input + liveMetrics.tokens.output} tokens
-                    </p>
-                  )}
                 </div>
               </div>
             </div>
@@ -743,6 +891,22 @@ export default function LiveCallPage() {
             <CardTitle>إعدادات المكالمة</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* Direct Gemini Toggle */}
+            <div className="flex items-center justify-between p-3 rounded-lg bg-gradient-to-r from-blue-500/10 to-purple-500/10 border border-purple-500/20">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-purple-500" />
+                <div>
+                  <p className="text-sm font-medium">Gemini مباشر</p>
+                  <p className="text-xs text-[var(--muted-foreground)]">أسرع استجابة (~300ms)</p>
+                </div>
+              </div>
+              <Switch
+                checked={useDirectGemini}
+                onCheckedChange={setUseDirectGemini}
+                disabled={status === "connected"}
+              />
+            </div>
+
             {/* Assistant Selector */}
             <div className="space-y-2">
               <label className="text-sm font-medium flex items-center gap-2">
@@ -769,10 +933,6 @@ export default function LiveCallPage() {
                     <Volume2 className="h-3 w-3 mr-1" />
                     {selectedAssistant.voice_provider}
                   </Badge>
-                  <Badge variant="outline" className="text-xs">
-                    <Mic className="h-3 w-3 mr-1" />
-                    {selectedAssistant.transcriber_provider}
-                  </Badge>
                 </div>
               )}
             </div>
@@ -795,11 +955,20 @@ export default function LiveCallPage() {
               {status === "disconnected" || status === "error" ? (
                 <Button
                   size="lg"
-                  className="w-full h-12 bg-green-600 hover:bg-green-700"
+                  className={`w-full h-12 ${useDirectGemini ? 'bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700' : 'bg-green-600 hover:bg-green-700'}`}
                   onClick={connect}
                 >
-                  <Phone className="h-5 w-5 mr-2" />
-                  ابدأ المكالمة
+                  {useDirectGemini ? (
+                    <>
+                      <Sparkles className="h-5 w-5 mr-2" />
+                      ابدأ مع Gemini
+                    </>
+                  ) : (
+                    <>
+                      <Phone className="h-5 w-5 mr-2" />
+                      ابدأ المكالمة
+                    </>
+                  )}
                 </Button>
               ) : status === "connecting" ? (
                 <Button size="lg" className="w-full h-12" disabled>
@@ -921,7 +1090,6 @@ export default function LiveCallPage() {
                 </div>
               ))}
 
-              {/* Interim transcript */}
               {interimText && (
                 <div className="flex justify-end">
                   <div className="max-w-[80%] p-3 rounded-lg bg-[var(--primary)]/50 text-[var(--primary-foreground)]">
@@ -933,7 +1101,6 @@ export default function LiveCallPage() {
                 </div>
               )}
 
-              {/* Processing indicator */}
               {agentState === "processing" && (
                 <div className="flex justify-start">
                   <div className="max-w-[80%] p-3 rounded-lg bg-[var(--card)] border">
