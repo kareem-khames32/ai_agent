@@ -55,18 +55,22 @@ const realtimeProviders = [
 // Realtime models by provider
 const realtimeModelsByProvider: Record<string, { value: string; label: string; description: string }[]> = {
   openai: [
-    { value: "gpt-4o-realtime-preview", label: "GPT-4o Realtime Preview", description: "Audio in/out, function calling" },
-    { value: "gpt-4o-realtime-preview-2024-12-17", label: "GPT-4o Realtime (Dec 2024)", description: "Latest stable version" },
-    { value: "gpt-4o-mini-realtime-preview", label: "GPT-4o Mini Realtime", description: "Faster, cheaper option" },
+    { value: "gpt-4o-realtime-preview-2024-12-17", label: "GPT-4o Realtime (Dec 2024)", description: "Latest stable - $0.30/min" },
+    { value: "gpt-4o-realtime-preview", label: "GPT-4o Realtime Preview", description: "Audio in/out - $0.30/min" },
+    { value: "gpt-realtime", label: "GPT Realtime (GA)", description: "20% cheaper - $0.057/min" },
+    { value: "gpt-4o-mini-realtime-preview", label: "GPT-4o Mini Realtime", description: "Cheapest - $0.018/min" },
   ],
   google: [
-    { value: "gemini-2.0-flash-exp", label: "Gemini 2.0 Flash (Live)", description: "Multimodal live streaming" },
-    { value: "gemini-2.0-flash-thinking-exp", label: "Gemini 2.0 Flash Thinking", description: "With reasoning" },
+    { value: "gemini-2.0-flash-exp", label: "Gemini 2.0 Flash", description: "Best for Live - $0.0225/min" },
+    { value: "gemini-2.0-flash-live-001", label: "Gemini 2.0 Flash Live", description: "Optimized for Live API" },
+    { value: "gemini-2.5-flash-preview-native-audio", label: "Gemini 2.5 Flash Native Audio", description: "Newest - 30 HD voices" },
+    // NOTE: Thinking models do NOT support Live API
   ],
   groq: [
     { value: "llama-3.3-70b-versatile", label: "Llama 3.3 70B", description: "Best quality, 275 tok/s" },
+    { value: "llama-3.1-70b-versatile", label: "Llama 3.1 70B", description: "Great for Arabic" },
     { value: "llama-3.1-8b-instant", label: "Llama 3.1 8B Instant", description: "Ultra fast, 750 tok/s" },
-    { value: "mixtral-8x7b-32768", label: "Mixtral 8x7B", description: "Great for Arabic" },
+    { value: "mixtral-8x7b-32768", label: "Mixtral 8x7B", description: "Balanced speed/quality" },
   ],
   elevenlabs: [
     { value: "eleven_turbo_v2_5", label: "Turbo v2.5", description: "Lowest latency" },
@@ -88,10 +92,12 @@ const realtimeVoicesByProvider: Record<string, { value: string; label: string }[
   ],
   google: [
     { value: "Puck", label: "Puck (Default)" },
-    { value: "Charon", label: "Charon" },
-    { value: "Kore", label: "Kore" },
-    { value: "Fenrir", label: "Fenrir" },
-    { value: "Aoede", label: "Aoede" },
+    { value: "Charon", label: "Charon (ذكر)" },
+    { value: "Kore", label: "Kore (أنثى)" },
+    { value: "Fenrir", label: "Fenrir (ذكر)" },
+    { value: "Aoede", label: "Aoede (أنثى)" },
+    { value: "Orbit", label: "Orbit (جديد)" },
+    { value: "Orus", label: "Orus (جديد)" },
   ],
   groq: [], // Uses separate TTS
   elevenlabs: [
