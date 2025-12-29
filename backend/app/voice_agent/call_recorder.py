@@ -188,14 +188,18 @@ class CallRecorder:
                 "text_input": 5.00,      # $5/1M tokens (cached: $2.50)
                 "text_output": 20.00,    # $20/1M tokens
             },
-            # Gemini 2.0 Flash Live - currently free
+            # Gemini 2.0 Flash Live API pricing
+            # Source: https://cloud.google.com/vertex-ai/generative-ai/pricing
+            # Audio: 25 tokens/second, so 1500 tokens/minute
+            # Input: $3/1M tokens = (1500/1M)*3 = $0.0045/min
+            # Output: $12/1M tokens = (1500/1M)*12 = $0.018/min
             "google": {
-                "audio_input": 0.0,
-                "audio_output": 0.0,
+                "audio_input": 0.0045,   # $3/1M tokens @ 25 tok/sec
+                "audio_output": 0.018,   # $12/1M tokens @ 25 tok/sec
             },
             "gemini": {
-                "audio_input": 0.0,
-                "audio_output": 0.0,
+                "audio_input": 0.0045,   # $3/1M tokens @ 25 tok/sec
+                "audio_output": 0.018,   # $12/1M tokens @ 25 tok/sec
             },
             # Groq uses pipeline (Whisper STT + LLM + TTS) - not native realtime
             # But when used in "realtime" mode, calculate as pipeline
