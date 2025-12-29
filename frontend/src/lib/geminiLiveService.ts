@@ -86,8 +86,8 @@ export class GeminiLiveService {
   private processor: ScriptProcessorNode | null = null;
   private nextPlayTime: number = 0;
 
-  // Gemini Live WebSocket URL
-  private readonly WS_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent';
+  // Gemini Live WebSocket URL (v1beta supports Live API)
+  private readonly WS_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
 
   constructor(config: GeminiLiveConfig, callbacks: GeminiLiveCallbacks = {}) {
     this.config = {

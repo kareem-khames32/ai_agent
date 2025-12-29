@@ -284,14 +284,11 @@ const modelsByProvider: Record<string, { value: string; label: string; price?: s
     { value: "claude-haiku-4.5", label: "Claude Haiku 4.5 (Latest)", price: "-", context: "200K" },
   ],
   google: [
-    { value: "gemini-2.5-pro", label: "Gemini 2.5 Pro (Most Powerful)", price: "-", context: "-" },
-    { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash (Best Value)", price: "-", context: "-" },
-    { value: "gemini-2.0-flash", label: "Gemini 2.0 Flash", price: "$0.075/$0.30 per 1M", context: "1M" },
-    { value: "gemini-2.0-pro", label: "Gemini 2.0 Pro", price: "-", context: "2M" },
-    { value: "gemini-2.0-flash-lite", label: "Gemini 2.0 Flash Lite (Cheapest)", price: "-", context: "-" },
-    { value: "gemini-3-pro", label: "Gemini 3 Pro (Newest)", price: "-", context: "-" },
+    { value: "gemini-2.0-flash-exp", label: "Gemini 2.0 Flash (Exp)", price: "$0.10/$0.40 per 1M", context: "1M" },
+    { value: "gemini-2.0-flash", label: "Gemini 2.0 Flash", price: "$0.10/$0.40 per 1M", context: "1M" },
     { value: "gemini-1.5-pro", label: "Gemini 1.5 Pro", price: "$1.25/$5 per 1M", context: "2M" },
     { value: "gemini-1.5-flash", label: "Gemini 1.5 Flash", price: "$0.075/$0.30 per 1M", context: "1M" },
+    { value: "gemini-1.5-flash-8b", label: "Gemini 1.5 Flash 8B (Fastest)", price: "$0.0375/$0.15 per 1M", context: "1M" },
   ],
   groq: [
     { value: "llama-3.3-70b-versatile", label: "Llama 3.3 70B (Best)", price: "$0.59/$0.79 per 1M", context: "128K" },
