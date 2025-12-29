@@ -162,16 +162,28 @@ export class GeminiLiveService {
 
         // Setup message handler will call resolve on success
         const originalOnMessage = this.ws.onmessage;
-        this.ws.onmessage = (event) => {
-          const data = JSON.parse(event.data);
-          if (data.setupComplete) {
-            this.state = 'connected';
-            this.startAudioCapture();
-            this.callbacks.onReady?.();
-            this.ws!.onmessage = originalOnMessage;
-            resolve(true);
-          } else {
-            originalOnMessage?.call(this.ws, event);
+        this.ws.onmessage = async (event) => {
+          try {
+            // Handle both text and binary messages
+            let data: any;
+            if (event.data instanceof Blob) {
+              const text = await event.data.text();
+              data = JSON.parse(text);
+            } else {
+              data = JSON.parse(event.data);
+            }
+
+            if (data.setupComplete) {
+              this.state = 'connected';
+              this.startAudioCapture();
+              this.callbacks.onReady?.();
+              this.ws!.onmessage = (e) => this.handleMessage(e);
+              resolve(true);
+            } else {
+              this.handleMessageData(data);
+            }
+          } catch (e) {
+            console.error('Error parsing setup message:', e);
           }
         };
 
@@ -230,11 +242,28 @@ export class GeminiLiveService {
   }
 
   /**
-   * Handle incoming messages from Gemini
+   * Handle incoming WebSocket message event
    */
-  private handleMessage(data: string) {
+  private async handleMessage(event: MessageEvent) {
     try {
-      const message = JSON.parse(data);
+      let data: any;
+      if (event.data instanceof Blob) {
+        const text = await event.data.text();
+        data = JSON.parse(text);
+      } else {
+        data = JSON.parse(event.data);
+      }
+      this.handleMessageData(data);
+    } catch (error) {
+      console.error('Error parsing message:', error);
+    }
+  }
+
+  /**
+   * Process parsed message data from Gemini
+   */
+  private handleMessageData(message: any) {
+    try {
 
       // Handle setup complete
       if (message.setupComplete) {
