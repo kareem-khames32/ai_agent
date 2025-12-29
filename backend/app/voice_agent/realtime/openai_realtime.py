@@ -81,13 +81,19 @@ class OpenAIRealtimeAgent:
             self.state = RealtimeState.CONNECTING
 
             url = f"{self.REALTIME_URL}?model={self.model}"
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "OpenAI-Beta": "realtime=v1",
-            }
+            headers = [
+                ("Authorization", f"Bearer {self.api_key}"),
+                ("OpenAI-Beta", "realtime=v1"),
+            ]
 
             logger.info(f"🔌 Connecting to OpenAI Realtime API...")
-            self._ws = await websockets.connect(url, extra_headers=headers)
+
+            # Use additional_headers for newer websockets, fallback to older syntax
+            try:
+                self._ws = await websockets.connect(url, additional_headers=headers)
+            except TypeError:
+                # Older websockets version
+                self._ws = await websockets.connect(url, extra_headers=dict(headers))
 
             # Configure the session
             await self._configure_session()
