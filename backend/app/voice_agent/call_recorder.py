@@ -180,20 +180,29 @@ class CallRecorder:
             "google": 16.00,
         },
         "realtime": {
-            # OpenAI Realtime API pricing (per minute)
+            # OpenAI Realtime API pricing
+            # Source: https://openai.com/api/pricing/
             "openai": {
-                "audio_input": 0.06,     # $0.06/min input audio
-                "audio_output": 0.24,    # $0.24/min output audio
+                "audio_input": 0.06,     # $0.06/min input audio (~$100/1M tokens)
+                "audio_output": 0.24,    # $0.24/min output audio (~$200/1M tokens)
                 "text_input": 5.00,      # $5/1M tokens (cached: $2.50)
                 "text_output": 20.00,    # $20/1M tokens
             },
+            # Gemini 2.0 Flash Live - currently free
             "google": {
-                "audio_input": 0.0,      # Gemini Live - free tier
+                "audio_input": 0.0,
                 "audio_output": 0.0,
             },
+            "gemini": {
+                "audio_input": 0.0,
+                "audio_output": 0.0,
+            },
+            # Groq uses pipeline (Whisper STT + LLM + TTS) - not native realtime
+            # But when used in "realtime" mode, calculate as pipeline
             "groq": {
-                "audio_input": 0.000111, # Whisper for STT
-                "llm": 0.00059,          # LLM cost per 1K tokens
+                "audio_input": 0.000667,  # Whisper $0.04/hr = $0.000667/min
+                "audio_output": 0.0,      # No native audio output
+                "llm_per_1m": 0.59,       # Llama 70B ~$0.59/1M tokens
             },
         }
     }
@@ -330,24 +339,29 @@ class CallRecorder:
 
         if voice_mode == "realtime":
             # Realtime API pricing
-            provider = self.call_log.realtime_provider or "openai"
+            provider = (self.call_log.realtime_provider or "openai").lower()
             rates = self.COST_RATES["realtime"].get(provider, {})
 
             input_minutes = self._metrics.user_audio_duration_sec / 60
             output_minutes = self._metrics.assistant_audio_duration_sec / 60
 
             # Calculate audio cost (per minute rates)
-            audio_input_rate = rates.get("audio_input", rates.get("input", 0))
-            audio_output_rate = rates.get("audio_output", rates.get("output", 0))
+            audio_input_rate = rates.get("audio_input", 0)
+            audio_output_rate = rates.get("audio_output", 0)
             audio_cost = (input_minutes * audio_input_rate) + (output_minutes * audio_output_rate)
 
-            # Add text token cost if applicable (per 1M tokens)
+            # Add text/LLM token cost if applicable
             text_cost = 0
             if "text_input" in rates and "text_output" in rates:
+                # OpenAI Realtime style (per 1M tokens for text)
                 text_cost = (
                     (self._metrics.input_tokens / 1_000_000) * rates["text_input"] +
                     (self._metrics.output_tokens / 1_000_000) * rates["text_output"]
                 )
+            elif "llm_per_1m" in rates:
+                # Groq style (single rate per 1M tokens)
+                total_tokens = self._metrics.input_tokens + self._metrics.output_tokens
+                text_cost = (total_tokens / 1_000_000) * rates["llm_per_1m"]
 
             self._cost.total_cost = audio_cost + text_cost
             self._cost.stt_cost = input_minutes * audio_input_rate
