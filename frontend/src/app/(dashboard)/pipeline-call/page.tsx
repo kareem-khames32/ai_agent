@@ -257,6 +257,20 @@ export default function PipelineCallPage() {
         }));
         break;
 
+      case "response":
+        // Assistant response text (pipeline mode)
+        console.log("Assistant response:", message.text);
+        setTranscript(prev => [...prev, {
+          role: "assistant",
+          text: message.text,
+          timestamp: new Date(),
+        }]);
+        setLiveMetrics(prev => ({
+          ...prev!,
+          responseCount: (prev?.responseCount || 0) + 1,
+        }));
+        break;
+
       case "error":
         addToast({ type: "error", title: "Error", description: message.message });
         break;
