@@ -58,6 +58,10 @@ export default function PipelineCallPage() {
   const durationIntervalRef = React.useRef<NodeJS.Timeout | null>(null);
   const nextPlayTimeRef = React.useRef(0);
 
+  // Refs for values accessed in audio callback (to avoid stale closures)
+  const isConnectedRef = React.useRef(false);
+  const isMicMutedRef = React.useRef(false);
+
   React.useEffect(() => {
     setMounted(true);
     // Load assistant from localStorage
@@ -79,6 +83,15 @@ export default function PipelineCallPage() {
   React.useEffect(() => {
     return () => disconnect();
   }, []);
+
+  // Keep refs in sync with state
+  React.useEffect(() => {
+    isConnectedRef.current = status === "connected";
+  }, [status]);
+
+  React.useEffect(() => {
+    isMicMutedRef.current = isMicMuted;
+  }, [isMicMuted]);
 
   const startDurationTimer = () => {
     callStartTimeRef.current = Date.now();
@@ -190,6 +203,7 @@ export default function PipelineCallPage() {
   const handleMessage = (message: any) => {
     switch (message.type) {
       case "ready":
+        isConnectedRef.current = true;  // Set immediately for audio callback
         setStatus("connected");
         startDurationTimer();
         startAudioCapture();
@@ -237,14 +251,26 @@ export default function PipelineCallPage() {
   };
 
   const startAudioCapture = () => {
-    if (!audioContextRef.current || !mediaStreamRef.current || !wsRef.current) return;
+    if (!audioContextRef.current || !mediaStreamRef.current || !wsRef.current) {
+      console.error("Missing refs for audio capture:", {
+        audioContext: !!audioContextRef.current,
+        mediaStream: !!mediaStreamRef.current,
+        ws: !!wsRef.current,
+      });
+      return;
+    }
+
+    console.log("Starting audio capture, sample rate:", audioContextRef.current.sampleRate);
 
     const source = audioContextRef.current.createMediaStreamSource(mediaStreamRef.current);
     const processor = audioContextRef.current.createScriptProcessor(4096, 1, 1);
     processorRef.current = processor;
 
+    let audioSentCount = 0;
+
     processor.onaudioprocess = (e) => {
-      if (isMicMuted || status !== "connected") return;
+      // Use refs to avoid stale closure problem
+      if (isMicMutedRef.current || !isConnectedRef.current) return;
 
       const inputData = e.inputBuffer.getChannelData(0);
       const targetSampleRate = 16000;
@@ -263,10 +289,16 @@ export default function PipelineCallPage() {
 
       const base64 = btoa(String.fromCharCode(...new Uint8Array(pcm16.buffer)));
       wsRef.current?.send(JSON.stringify({ type: "audio", data: base64 }));
+
+      audioSentCount++;
+      if (audioSentCount % 50 === 0) {
+        console.log(`Audio sent: ${audioSentCount} chunks`);
+      }
     };
 
     source.connect(processor);
     processor.connect(audioContextRef.current.destination);
+    console.log("Audio capture started");
   };
 
   const stopAudioCapture = () => {
@@ -303,6 +335,7 @@ export default function PipelineCallPage() {
   };
 
   const disconnect = () => {
+    isConnectedRef.current = false;
     wsRef.current?.close();
     stopAudioCapture();
     stopDurationTimer();
