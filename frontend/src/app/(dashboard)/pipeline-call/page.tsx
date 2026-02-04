@@ -57,6 +57,7 @@ export default function PipelineCallPage() {
   const callStartTimeRef = React.useRef<number>(0);
   const durationIntervalRef = React.useRef<NodeJS.Timeout | null>(null);
   const nextPlayTimeRef = React.useRef(0);
+  const activeAudioSourcesRef = React.useRef<AudioBufferSourceNode[]>([]);
 
   // Refs for values accessed in callbacks (to avoid stale closures)
   const isConnectedRef = React.useRef(false);
@@ -246,6 +247,12 @@ export default function PipelineCallPage() {
         }
         break;
 
+      case "clear_audio":
+        // Barge-in: stop all playing audio immediately
+        console.log("Clear audio - stopping all playback (barge-in)");
+        clearAudioQueue();
+        break;
+
       case "state":
         setAgentState(message.state);
         break;
@@ -333,6 +340,24 @@ export default function PipelineCallPage() {
     mediaStreamRef.current?.getTracks().forEach(t => t.stop());
   };
 
+  const clearAudioQueue = () => {
+    // Stop all currently playing/scheduled audio sources
+    activeAudioSourcesRef.current.forEach(source => {
+      try {
+        source.stop();
+      } catch (e) {
+        // Source may have already stopped
+      }
+    });
+    activeAudioSourcesRef.current = [];
+
+    // Reset the playback time to current time
+    if (audioContextRef.current) {
+      nextPlayTimeRef.current = audioContextRef.current.currentTime;
+    }
+    console.log("Audio queue cleared");
+  };
+
   const playAudio = (base64Audio: string) => {
     if (!audioContextRef.current) {
       console.error("No audio context for playback");
@@ -363,6 +388,17 @@ export default function PipelineCallPage() {
       const startTime = Math.max(currentTime, nextPlayTimeRef.current);
       source.start(startTime);
       nextPlayTimeRef.current = startTime + buffer.duration;
+
+      // Track this source so we can stop it on barge-in
+      activeAudioSourcesRef.current.push(source);
+
+      // Remove from list when done playing
+      source.onended = () => {
+        const idx = activeAudioSourcesRef.current.indexOf(source);
+        if (idx !== -1) {
+          activeAudioSourcesRef.current.splice(idx, 1);
+        }
+      };
 
       console.log(`Playing audio: ${floatData.length} samples, duration: ${buffer.duration.toFixed(2)}s`);
     } catch (e) {

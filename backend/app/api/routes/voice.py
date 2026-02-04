@@ -226,6 +226,18 @@ async def voice_agent_websocket(
         except Exception as e:
             logger.error(f"Send state error: {e}")
 
+    async def send_clear_audio():
+        """Send clear audio message to stop frontend playback (barge-in)"""
+        if not is_connected:
+            return
+        try:
+            await websocket.send_json({
+                "type": "clear_audio"
+            })
+            logger.info("🔇 Sent clear_audio to client")
+        except Exception as e:
+            logger.error(f"Send clear_audio error: {e}")
+
     try:
         # Wait for config message
         config_received = False
@@ -336,6 +348,7 @@ async def voice_agent_websocket(
                         agent.on_transcript = send_transcript_pipeline
                         agent.on_response = send_response
                         agent.on_state_change = send_state
+                        agent.on_clear_audio = send_clear_audio
 
                         await agent.start(system_prompt)
 
@@ -349,6 +362,7 @@ async def voice_agent_websocket(
                     agent.on_transcript = send_transcript_pipeline
                     agent.on_response = send_response
                     agent.on_state_change = send_state
+                    agent.on_clear_audio = send_clear_audio
                     await agent.start()
                     config_received = True
 
@@ -360,6 +374,7 @@ async def voice_agent_websocket(
                 agent.on_transcript = send_transcript_pipeline
                 agent.on_response = send_response
                 agent.on_state_change = send_state
+                agent.on_clear_audio = send_clear_audio
                 await agent.start()
                 config_received = True
 

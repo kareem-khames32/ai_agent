@@ -149,6 +149,7 @@ class VoiceAgent:
         self.on_transcript: Optional[Callable[[str, bool], Awaitable[None]]] = None
         self.on_response: Optional[Callable[[str], Awaitable[None]]] = None
         self.on_state_change: Optional[Callable[[AgentState], Awaitable[None]]] = None
+        self.on_clear_audio: Optional[Callable[[], Awaitable[None]]] = None  # Clear audio queue on barge-in
 
         # Internal state
         self._is_running = False
@@ -174,7 +175,8 @@ class VoiceAgent:
         self._speaking_ended_time = 0.0  # When SPEAKING state ended (for delayed STT handling)
 
         # Noise filter for background audio (TV, YouTube, etc.)
-        self._noise_filter = NoiseFilter(window_seconds=10.0, repeat_threshold=2)
+        # repeat_threshold=1 means filter on FIRST repeat (immediate)
+        self._noise_filter = NoiseFilter(window_seconds=10.0, repeat_threshold=1)
 
         # Wire up callbacks
         self._setup_callbacks()
@@ -320,7 +322,8 @@ class VoiceAgent:
         Instead of just stopping and going to next step, we:
         1. Save what AI was saying (partial response)
         2. Stop TTS
-        3. Process user's interruption WITH context of what AI was saying
+        3. Clear frontend audio queue
+        4. Process user's interruption WITH context of what AI was saying
         """
         self.latency.mark("bargein_detected")
         logger.info(f"⚠️ BARGE-IN confirmed! User said: \"{user_interruption}\"")
@@ -334,6 +337,11 @@ class VoiceAgent:
         self.tts.cancel()
         self.tts.clear_queue()
         self._pending_tts_count = 0
+
+        # Clear frontend audio queue immediately
+        if self.on_clear_audio:
+            await self.on_clear_audio()
+            logger.info("🔇 Sent clear_audio to frontend")
 
         # Reset barge-in detection state
         self._bargein_detecting = False
