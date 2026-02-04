@@ -377,9 +377,15 @@ const voicesByProvider: Record<string, { value: string; label: string; gender: s
   ],
 
   // ============== ELEVENLABS VOICES (40+ voices) ==============
+  // Note: All voices support Arabic via eleven_multilingual_v2 model
   elevenlabs: [
-    { value: "EXAVITQu4vr4xnSDxMaL", label: "Rachel (هادئ)", gender: "female", language: "en-US" },
-    { value: "pNInz6obpgDQGcFmaJgB", label: "Adam (عميق)", gender: "male", language: "en-US" },
+    // Arabic-friendly voices (recommended for Arabic)
+    { value: "pNInz6obpgDQGcFmaJgB", label: "Adam (عربي ممتاز - ذكر)", gender: "male", language: "ar" },
+    { value: "EXAVITQu4vr4xnSDxMaL", label: "Rachel (عربي ممتاز - أنثى)", gender: "female", language: "ar" },
+    { value: "onwK4e9ZLuTAKqWW03F9", label: "Daniel (عربي عميق - ذكر)", gender: "male", language: "ar" },
+    { value: "XrExE9yKIg1WjnnlVkGX", label: "Matilda (عربي دافئ - أنثى)", gender: "female", language: "ar" },
+    { value: "ODq5zmih8GrVes37Dizd", label: "Antoni (عربي معبر - ذكر)", gender: "male", language: "ar" },
+    // Original English voices
     { value: "21m00Tcm4TlvDq8ikWAM", label: "Drew (واثق)", gender: "male", language: "en-US" },
     { value: "AZnzlk1XvdvUeBnXmlld", label: "Clyde (حربي)", gender: "male", language: "en-US" },
     { value: "CYw3kZ02Hs0563khs1Fj", label: "Paul (أخبار)", gender: "male", language: "en-US" },

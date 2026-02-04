@@ -324,8 +324,8 @@ async def voice_agent_websocket(
                         # Pipeline mode - use VoiceAgent
                         if assistant_data:
                             config = create_config_from_assistant(assistant_data, credentials)
-                            logger.info(f"📋 Config from assistant: LLM={config.llm_provider}/{config.llm_model}, TTS={config.tts_provider}, STT={config.stt_provider}")
-                            logger.info(f"🔑 STT API key present: {bool(config.stt_api_key)}, deepgram creds: {bool(credentials.get('deepgram', {}).get('api_key'))}")
+                            logger.info(f"📋 Config from assistant: LLM={config.llm_provider}/{config.llm_model}, TTS={config.tts_provider}/{config.tts_voice}, STT={config.stt_provider}")
+                            logger.info(f"🔑 API keys - STT: {bool(config.stt_api_key)}, TTS: {bool(config.tts_api_key)}, LLM: {bool(config.llm_api_key)}")
 
                             # Configure recorder for pipeline mode
                             recorder.set_config(
