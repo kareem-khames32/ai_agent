@@ -149,7 +149,7 @@ class ElevenLabsTTS(TTSProvider):
                     "output_format": "pcm_24000",
                     "voice_settings": {
                         "stability": 0.5,
-                        "similarity_boost": 0.75
+                        "similarity_boost": 0.8
                     }
                 }
             ) as response:
