@@ -701,7 +701,10 @@ class VoiceAgent:
     async def _check_speaking_complete(self):
         """Check if all speaking is complete and we can go back to listening"""
         if not self._llm_generating and self._pending_tts_count <= 0:
-            if self.state == AgentState.SPEAKING:
+            # Handle both SPEAKING and PROCESSING states
+            # PROCESSING: LLM failed before generating any text
+            # SPEAKING: Normal completion after TTS finished
+            if self.state in (AgentState.SPEAKING, AgentState.PROCESSING):
                 # Don't change state if barge-in is being detected
                 if self._bargein_detecting:
                     logger.debug("Speaking complete but waiting for barge-in detection")
