@@ -58,7 +58,7 @@ class STTProvider:
 
 
 class DeepgramSTT(STTProvider):
-    """Deepgram Streaming STT"""
+    """Deepgram Streaming STT - SDK v3"""
 
     def __init__(self, config: VoiceAgentConfig):
         super().__init__(config)
@@ -68,37 +68,42 @@ class DeepgramSTT(STTProvider):
 
     async def connect(self) -> bool:
         try:
-            # Lazy import - Deepgram SDK v3
-            from deepgram import DeepgramClient
+            # Deepgram SDK v3 imports
+            from deepgram import DeepgramClient, LiveTranscriptionEvents, LiveOptions
 
             api_key = self.config.stt_api_key or os.getenv("DEEPGRAM_API_KEY")
             if not api_key:
                 logger.error("Deepgram API key not configured")
                 return False
 
-            # Deepgram SDK v3 - pass api_key as keyword argument
-            self.client = DeepgramClient(api_key=api_key)
-            self.connection = self.client.listen.websocket.v("1")
+            # Create client (SDK v3)
+            self.client = DeepgramClient(api_key)
 
-            options = {
-                "model": self.config.stt_model or "nova-2",
-                "language": self.config.stt_language or "ar",
-                "punctuate": True,
-                "interim_results": True,
-                "endpointing": 300,
-                "utterance_end_ms": 1000,
-                "vad_events": True,
-                "smart_format": True,
-                "encoding": "linear16",
-                "sample_rate": 16000,
-                "channels": 1,
-            }
+            # Create live transcription options (SDK v3)
+            options = LiveOptions(
+                model=self.config.stt_model or "nova-2",
+                language=self.config.stt_language or "ar",
+                punctuate=True,
+                interim_results=True,
+                endpointing=300,
+                utterance_end_ms=1000,
+                vad_events=True,
+                smart_format=True,
+                encoding="linear16",
+                sample_rate=16000,
+                channels=1,
+            )
 
-            self.connection.on("transcript", self._on_transcript)
-            self.connection.on("speech_started", self._on_speech_started)
-            self.connection.on("utterance_end", self._on_utterance_end)
-            self.connection.on("error", self._on_error)
+            # Create live connection (SDK v3: listen.live not listen.websocket)
+            self.connection = self.client.listen.live.v("1")
 
+            # Set up event handlers (SDK v3 uses enum events)
+            self.connection.on(LiveTranscriptionEvents.Transcript, self._on_transcript)
+            self.connection.on(LiveTranscriptionEvents.SpeechStarted, self._on_speech_started)
+            self.connection.on(LiveTranscriptionEvents.UtteranceEnd, self._on_utterance_end)
+            self.connection.on(LiveTranscriptionEvents.Error, self._on_error)
+
+            # Start connection
             if self.connection.start(options):
                 self.is_connected = True
                 logger.info("✅ Deepgram STT connected")
@@ -110,6 +115,8 @@ class DeepgramSTT(STTProvider):
             return False
         except Exception as e:
             logger.error(f"Deepgram connection error: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
     async def send_audio(self, audio_chunk: bytes):
@@ -580,7 +587,7 @@ class STTStreamer:
 
     async def connect(self) -> bool:
         """Connect to STT provider"""
-        provider_name = (self.config.stt_provider or "openai").lower()
+        provider_name = (self.config.stt_provider or "deepgram").lower()
         self._current_provider_name = provider_name
 
         logger.info(f"🎤 Connecting to STT provider: {provider_name}")
@@ -588,9 +595,9 @@ class STTStreamer:
         # Create provider instance
         self.provider = self._create_provider(provider_name)
         if not self.provider:
-            logger.warning(f"Unknown STT provider: {provider_name}, using OpenAI Whisper")
-            self.provider = OpenAIWhisperSTT(self.config)
-            self._current_provider_name = "openai"
+            logger.warning(f"Unknown STT provider: {provider_name}, using Deepgram")
+            self.provider = DeepgramSTT(self.config)
+            self._current_provider_name = "deepgram"
 
         # Set up callbacks
         self.provider.on_transcript = self._on_transcript
