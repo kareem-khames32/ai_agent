@@ -329,6 +329,15 @@ class VoiceAgent:
         logger.info(f"⚠️ BARGE-IN confirmed! User said: \"{user_interruption}\"")
         logger.info(f"   AI was saying: \"{self._partial_ai_response[:100]}...\"")
 
+        # Cancel previous response task if running
+        if self._response_task and not self._response_task.done():
+            self._response_task.cancel()
+            try:
+                await self._response_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("🛑 Previous response task cancelled")
+
         # Cancel LLM generation
         self.llm.cancel()
         self._llm_generating = False
@@ -377,11 +386,16 @@ class VoiceAgent:
         self._current_ai_response = ""
 
         try:
-            # Add context about the interruption to the conversation
-            # This helps the AI respond naturally
-            interruption_context = f"[العميل قاطعني وأنا كنت بقول: \"{ai_partial_response[:150]}...\"] العميل قال: {user_text}"
+            # Add context about the interruption with clear instructions NOT to repeat
+            # Use special marker that LLM prompts understand
+            interruption_context = (
+                f"[تم مقاطعتي - لا تكرر ما قلته] "
+                f"كنت أقول: \"{ai_partial_response[:100]}...\" "
+                f"لكن العميل قاطعني وقال: \"{user_text}\". "
+                f"رد بشكل طبيعي على كلام العميل بدون إعادة التحية أو التعريف بنفسك مرة أخرى."
+            )
 
-            logger.info(f"🎯 Processing interruption with context")
+            logger.info(f"🎯 Processing interruption with context: {interruption_context[:100]}...")
 
             first_sentence = True
             async for token in self.llm.generate_stream(interruption_context):
