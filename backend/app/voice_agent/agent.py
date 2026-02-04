@@ -5,8 +5,9 @@ Main pipeline that connects all components
 import asyncio
 import time
 import uuid
-from typing import Optional, Callable, Awaitable
+from typing import Optional, Callable, Awaitable, Dict, List
 from enum import Enum
+from collections import deque
 
 from .config import VoiceAgentConfig, get_config
 from .pipeline import (
@@ -20,6 +21,71 @@ from .utils.logger import get_logger, LatencyTracker
 from .prompts import is_noise_only, clean_transcript
 
 logger = get_logger(__name__)
+
+
+class NoiseFilter:
+    """
+    Filter for background noise and repeated phrases.
+    Detects and ignores phrases that repeat frequently (e.g., TV/YouTube audio).
+    """
+
+    def __init__(self, window_seconds: float = 10.0, repeat_threshold: int = 2):
+        """
+        Args:
+            window_seconds: Time window to track phrases
+            repeat_threshold: Number of times a phrase must repeat to be considered noise
+        """
+        self._window_seconds = window_seconds
+        self._repeat_threshold = repeat_threshold
+        self._recent_phrases: deque = deque()  # (timestamp, phrase)
+        self._noise_phrases: set = set()  # Known noise phrases
+
+    def _normalize_phrase(self, text: str) -> str:
+        """Normalize phrase for comparison"""
+        # Remove extra spaces and normalize
+        return " ".join(text.strip().split()).lower()
+
+    def _cleanup_old_entries(self):
+        """Remove entries older than window"""
+        now = time.time()
+        while self._recent_phrases and (now - self._recent_phrases[0][0]) > self._window_seconds:
+            self._recent_phrases.popleft()
+
+    def is_noise(self, text: str) -> bool:
+        """
+        Check if text is likely background noise.
+        Returns True if the phrase has been repeated too many times.
+        """
+        if not text or not text.strip():
+            return True
+
+        normalized = self._normalize_phrase(text)
+
+        # Check if it's a known noise phrase
+        if normalized in self._noise_phrases:
+            logger.debug(f"🔇 Known noise phrase: \"{text}\"")
+            return True
+
+        # Cleanup old entries
+        self._cleanup_old_entries()
+
+        # Count occurrences of this phrase
+        count = sum(1 for _, phrase in self._recent_phrases if phrase == normalized)
+
+        # Add current phrase
+        self._recent_phrases.append((time.time(), normalized))
+
+        # If repeated too many times, mark as noise
+        if count >= self._repeat_threshold:
+            self._noise_phrases.add(normalized)
+            logger.info(f"🔇 Detected noise phrase (repeated {count + 1}x): \"{text}\"")
+            return True
+
+        return False
+
+    def reset(self):
+        """Reset the filter (but keep known noise phrases)"""
+        self._recent_phrases.clear()
 
 
 class AgentState(Enum):
@@ -91,11 +157,15 @@ class VoiceAgent:
         self._in_speaking_mode = False   # Flag to block VAD callbacks during SPEAKING
         self._speaking_ended_time = 0.0  # When SPEAKING state ended (for delayed STT handling)
 
+        # Noise filter for background audio (TV, YouTube, etc.)
+        self._noise_filter = NoiseFilter(window_seconds=10.0, repeat_threshold=2)
+
         # Wire up callbacks
         self._setup_callbacks()
 
         logger.info(f"🎙️ VoiceAgent created (call_id={self.call_id})")
         logger.info(f"   Interruption: enabled={self._enable_interruption}, words={self._interruption_words_required}, cooldown={self._bargein_cooldown_ms}ms")
+        logger.info(f"   Noise filter: window=10s, repeat_threshold=2")
 
     def _setup_callbacks(self):
         """Wire up internal callbacks between components"""
@@ -348,6 +418,11 @@ class VoiceAgent:
         if event.is_final:
             self.latency.mark("stt_final")
 
+        # Filter out background noise (repeated phrases like TV/YouTube)
+        if event.text and self._noise_filter.is_noise(event.text):
+            logger.debug(f"🔇 Filtered noise: \"{event.text}\"")
+            return
+
         # Check if we're in SPEAKING state OR recently left it (Azure STT is slow ~500ms)
         speaking_or_recent = (
             self.state == AgentState.SPEAKING or
@@ -431,6 +506,8 @@ class VoiceAgent:
     # Turn Detector Callbacks
     async def _on_turn_start(self):
         """Turn started"""
+        # Reset noise filter for new turn (but keep known noise phrases)
+        self._noise_filter.reset()
         await self._set_state(AgentState.LISTENING)
 
     async def _on_turn_complete(self, text: str):

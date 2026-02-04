@@ -423,7 +423,7 @@ class DeepgramTTS(TTSProvider):
 
 class TTSStreamer:
     """
-    TTS Streamer with provider abstraction and automatic fallback
+    TTS Streamer with provider abstraction (no automatic fallback)
 
     Supports:
     - OpenAI (tts-1)
@@ -433,16 +433,10 @@ class TTSStreamer:
     - Deepgram (Aura)
     """
 
-    # Fallback order when a provider fails
-    FALLBACK_ORDER = ["openai", "elevenlabs", "deepgram", "azure"]
-
     def __init__(self, config: VoiceAgentConfig):
         self.config = config
         self.provider: Optional[TTSProvider] = None
         self._current_provider_name = ""
-        self._tried_providers: set = set()
-        self._max_errors_before_fallback = 3
-        self._switching_provider = False
 
         # State
         self.is_speaking = False
@@ -472,59 +466,23 @@ class TTSStreamer:
             return DeepgramTTS(self.config)
         return None
 
-    async def _try_fallback_provider(self) -> bool:
-        """Try to connect to a fallback TTS provider"""
-        for provider_name in self.FALLBACK_ORDER:
-            if provider_name in self._tried_providers:
-                continue
-            if provider_name == self._current_provider_name:
-                continue
-
-            logger.warning(f"🔄 Trying fallback TTS provider: {provider_name}")
-            self._tried_providers.add(provider_name)
-
-            # Close current provider
-            if self.provider:
-                await self.provider.close()
-
-            # Create and initialize new provider
-            self.provider = self._create_provider(provider_name)
-            if self.provider:
-                if await self.provider.initialize():
-                    self._current_provider_name = provider_name
-                    logger.info(f"✅ Switched to fallback TTS: {provider_name}")
-                    return True
-
-        logger.error("❌ All TTS providers failed!")
-        return False
-
     async def initialize(self):
         """Initialize TTS provider"""
         provider_name = self.config.tts_provider.lower()
         self._current_provider_name = provider_name
-        self._tried_providers.add(provider_name)
 
         self.provider = self._create_provider(provider_name)
         if not self.provider:
             logger.warning(f"Unknown TTS provider: {provider_name}, using OpenAI")
             self.provider = OpenAITTS(self.config)
             self._current_provider_name = "openai"
-            self._tried_providers.add("openai")
 
         result = await self.provider.initialize()
         if result:
             logger.info(f"✅ TTS provider {self._current_provider_name} ready")
         else:
-            # Try fallback
-            result = await self._try_fallback_provider()
+            logger.error(f"❌ Failed to initialize TTS provider: {provider_name}")
         return result
-
-    def _check_provider_errors(self) -> bool:
-        """Check if provider has too many errors and needs fallback"""
-        if self.provider and hasattr(self.provider, '_consecutive_errors'):
-            if self.provider._consecutive_errors >= self._max_errors_before_fallback:
-                return True
-        return False
 
     async def speak(self, text: str):
         """Speak text and stream audio chunks"""
@@ -536,15 +494,6 @@ class TTSStreamer:
         if not text or not text.strip():
             return
 
-        # Check for provider errors and trigger fallback before speaking
-        if self._check_provider_errors() and not self._switching_provider:
-            self._switching_provider = True
-            logger.warning(f"⚠️ {self._current_provider_name} TTS has too many errors, switching...")
-            switched = await self._try_fallback_provider()
-            self._switching_provider = False
-            if not switched:
-                return
-
         self.is_speaking = True
         self.should_cancel = False
 
@@ -555,27 +504,17 @@ class TTSStreamer:
                 await self.on_speech_start()
 
             first_chunk = True
-            got_audio = False
             async for audio_chunk in self.provider.synthesize(text):
                 if self.should_cancel:
                     logger.info("🛑 TTS cancelled (barge-in)")
                     break
 
-                got_audio = True
                 if first_chunk:
                     logger.debug("⚡ First audio chunk sent")
                     first_chunk = False
 
                 if self.on_audio_chunk:
                     await self.on_audio_chunk(audio_chunk)
-
-            # If we didn't get any audio, try fallback for next time
-            if not got_audio and not self.should_cancel:
-                if self._check_provider_errors() and not self._switching_provider:
-                    self._switching_provider = True
-                    logger.warning(f"⚠️ {self._current_provider_name} TTS returned no audio, switching...")
-                    await self._try_fallback_provider()
-                    self._switching_provider = False
 
             if self.on_speech_end:
                 await self.on_speech_end()

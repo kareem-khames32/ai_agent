@@ -549,22 +549,14 @@ class GroqWhisperSTT(STTProvider):
 class STTStreamer:
     """
     Multi-provider STT Streamer
-    Automatically selects provider based on config
-    With automatic fallback on provider failure
+    Selects provider based on config (no automatic fallback)
     """
-
-    # Fallback order when a provider fails
-    FALLBACK_ORDER = ["deepgram", "openai", "groq", "azure"]
 
     def __init__(self, config: VoiceAgentConfig):
         self.config = config
         self.provider: Optional[STTProvider] = None
         self._last_final_text = ""
         self._current_provider_name = ""
-        self._consecutive_errors = 0
-        self._max_errors_before_fallback = 3
-        self._tried_providers: set = set()
-        self._switching_provider = False
 
         # Callbacks to be forwarded
         self.on_transcript: Optional[Callable[[TranscriptEvent], Awaitable[None]]] = None
@@ -585,42 +577,10 @@ class STTStreamer:
             return AzureWhisperSTT(self.config)
         return None
 
-    async def _try_fallback_provider(self) -> bool:
-        """Try to connect to a fallback STT provider"""
-        for provider_name in self.FALLBACK_ORDER:
-            if provider_name in self._tried_providers:
-                continue
-            if provider_name == self._current_provider_name:
-                continue
-
-            logger.warning(f"🔄 Trying fallback STT provider: {provider_name}")
-            self._tried_providers.add(provider_name)
-
-            # Close current provider
-            if self.provider:
-                await self.provider.close()
-
-            # Create and connect new provider
-            self.provider = self._create_provider(provider_name)
-            if self.provider:
-                self.provider.on_transcript = self._on_transcript
-                self.provider.on_speech_started = self.on_speech_started
-                self.provider.on_utterance_end = self.on_utterance_end
-
-                if await self.provider.connect():
-                    self._current_provider_name = provider_name
-                    self._consecutive_errors = 0
-                    logger.info(f"✅ Switched to fallback STT: {provider_name}")
-                    return True
-
-        logger.error("❌ All STT providers failed!")
-        return False
-
     async def connect(self) -> bool:
         """Connect to STT provider"""
         provider_name = (self.config.stt_provider or "deepgram").lower()
         self._current_provider_name = provider_name
-        self._tried_providers.add(provider_name)
 
         logger.info(f"🎤 Connecting to STT provider: {provider_name}")
 
@@ -630,7 +590,6 @@ class STTStreamer:
             logger.warning(f"Unknown STT provider: {provider_name}, using Deepgram")
             self.provider = DeepgramSTT(self.config)
             self._current_provider_name = "deepgram"
-            self._tried_providers.add("deepgram")
 
         # Set up callbacks
         self.provider.on_transcript = self._on_transcript
@@ -640,27 +599,16 @@ class STTStreamer:
         # Connect
         success = await self.provider.connect()
         if not success:
-            # Try fallback providers
-            success = await self._try_fallback_provider()
+            logger.error(f"❌ Failed to connect to STT provider: {provider_name}")
 
         return success
 
     async def _on_transcript(self, event: TranscriptEvent):
         """Forward transcript event"""
-        # Reset error count on successful transcript
-        self._consecutive_errors = 0
-
         if event.is_final:
             self._last_final_text = event.text
         if self.on_transcript:
             await self.on_transcript(event)
-
-    def _check_provider_errors(self):
-        """Check if provider has too many errors and needs fallback"""
-        if self.provider and hasattr(self.provider, '_consecutive_errors'):
-            if self.provider._consecutive_errors >= self._max_errors_before_fallback:
-                return True
-        return False
 
     async def send_audio(self, audio_chunk: bytes):
         """Send audio to STT provider"""
@@ -668,14 +616,6 @@ class STTStreamer:
             return
 
         await self.provider.send_audio(audio_chunk)
-
-        # Check for provider errors and trigger fallback (only once)
-        if self._check_provider_errors() and not self._switching_provider:
-            self._switching_provider = True
-            logger.warning(f"⚠️ {self._current_provider_name} has too many errors, switching...")
-            switched = await self._try_fallback_provider()
-            if switched:
-                self._switching_provider = False
 
     async def close(self):
         """Close STT connection"""
