@@ -189,11 +189,11 @@ export default function PipelineCallPage() {
 
   const handleMessage = (message: any) => {
     switch (message.type) {
-      case "connected":
+      case "ready":
         setStatus("connected");
         startDurationTimer();
         startAudioCapture();
-        addToast({ type: "success", title: "Connected", description: "Pipeline call started" });
+        addToast({ type: "success", title: "Connected", description: `Pipeline call started (${message.call_id})` });
         break;
 
       case "transcript":
