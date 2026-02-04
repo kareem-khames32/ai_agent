@@ -35,6 +35,9 @@ class NoiseFilter:
         # Arabic YouTube phrases
         "اشتركوا في القناة",
         "اشترك في القناة",
+        "الاشتراك في القناة",
+        "لا تنسى الاشتراك",
+        "فلا تنسى الاشتراك",
         "اشتركوا",
         "اضغط لايك",
         "اضغط على الجرس",
@@ -50,6 +53,18 @@ class NoiseFilter:
         "تابعونا",
         "الرابط في الوصف",
         "لينك في الوصف",
+        "ترجمة",
+        "ترجمة نانسي",
+        "إذا كنت ترغب في التعليقات",
+        "التعليقات",
+        "كوميكس",
+        "سبيس تون",
+        "شاهد",
+        "حصريا",
+        "جديد",
+        "مسلسل",
+        "الحلقة",
+        "فيلم",
         # English YouTube phrases
         "subscribe",
         "like and subscribe",
@@ -59,6 +74,8 @@ class NoiseFilter:
         "thanks for watching",
         "end of video",
         "link in description",
+        "translation",
+        "subtitles",
     }
 
     # Common single-word fillers that are often noise
@@ -132,10 +149,16 @@ class NoiseFilter:
 
         normalized = self._normalize_phrase(text)
 
-        # Check if it's a known noise phrase
+        # Check if it's a known noise phrase (exact match)
         if normalized in self._noise_phrases:
             logger.debug(f"🔇 Known noise phrase: \"{text}\"")
             return True
+
+        # Check if text CONTAINS any known noise phrase (for longer YouTube phrases)
+        for noise in self._noise_phrases:
+            if noise in normalized and len(noise) > 3:  # Only check phrases longer than 3 chars
+                logger.debug(f"🔇 Contains noise phrase '{noise}': \"{text}\"")
+                return True
 
         # Check if it's TTS echo
         if self._is_echo(text):
