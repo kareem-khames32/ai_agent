@@ -68,7 +68,7 @@ class DeepgramSTT(STTProvider):
 
     async def connect(self) -> bool:
         try:
-            # Lazy import
+            # Lazy import - Deepgram SDK v3
             from deepgram import DeepgramClient
 
             api_key = self.config.stt_api_key or os.getenv("DEEPGRAM_API_KEY")
@@ -76,7 +76,8 @@ class DeepgramSTT(STTProvider):
                 logger.error("Deepgram API key not configured")
                 return False
 
-            self.client = DeepgramClient(api_key)
+            # Deepgram SDK v3 - pass api_key as keyword argument
+            self.client = DeepgramClient(api_key=api_key)
             self.connection = self.client.listen.websocket.v("1")
 
             options = {
