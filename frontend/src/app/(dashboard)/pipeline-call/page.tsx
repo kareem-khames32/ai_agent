@@ -58,9 +58,13 @@ export default function PipelineCallPage() {
   const durationIntervalRef = React.useRef<NodeJS.Timeout | null>(null);
   const nextPlayTimeRef = React.useRef(0);
 
-  // Refs for values accessed in audio callback (to avoid stale closures)
+  // Refs for values accessed in callbacks (to avoid stale closures)
   const isConnectedRef = React.useRef(false);
   const isMicMutedRef = React.useRef(false);
+  const isSpeakerMutedRef = React.useRef(false);
+
+  // Ref for message handler (so WebSocket always uses latest)
+  const handleMessageRef = React.useRef<(message: any) => void>(() => {});
 
   React.useEffect(() => {
     setMounted(true);
@@ -92,6 +96,10 @@ export default function PipelineCallPage() {
   React.useEffect(() => {
     isMicMutedRef.current = isMicMuted;
   }, [isMicMuted]);
+
+  React.useEffect(() => {
+    isSpeakerMutedRef.current = isSpeakerMuted;
+  }, [isSpeakerMuted]);
 
   const startDurationTimer = () => {
     callStartTimeRef.current = Date.now();
@@ -176,7 +184,8 @@ export default function PipelineCallPage() {
       ws.onmessage = async (event) => {
         try {
           const message = JSON.parse(event.data);
-          handleMessage(message);
+          // Use ref to always call latest handler
+          handleMessageRef.current(message);
         } catch (e) {
           console.error("Error parsing message:", e);
         }
@@ -200,7 +209,8 @@ export default function PipelineCallPage() {
     }
   };
 
-  const handleMessage = (message: any) => {
+  // Update the message handler ref on every render
+  handleMessageRef.current = (message: any) => {
     switch (message.type) {
       case "ready":
         isConnectedRef.current = true;  // Set immediately for audio callback
@@ -230,7 +240,10 @@ export default function PipelineCallPage() {
         break;
 
       case "audio":
-        if (!isSpeakerMuted) playAudio(message.data);
+        console.log("Received audio chunk, speaker muted:", isSpeakerMutedRef.current);
+        if (!isSpeakerMutedRef.current) {
+          playAudio(message.data);
+        }
         break;
 
       case "state":
@@ -307,31 +320,40 @@ export default function PipelineCallPage() {
   };
 
   const playAudio = (base64Audio: string) => {
-    if (!audioContextRef.current) return;
-
-    const binaryString = atob(base64Audio);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
+    if (!audioContextRef.current) {
+      console.error("No audio context for playback");
+      return;
     }
 
-    const pcm16 = new Int16Array(bytes.buffer);
-    const floatData = new Float32Array(pcm16.length);
-    for (let i = 0; i < pcm16.length; i++) {
-      floatData[i] = pcm16[i] / 32768;
+    try {
+      const binaryString = atob(base64Audio);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+
+      const pcm16 = new Int16Array(bytes.buffer);
+      const floatData = new Float32Array(pcm16.length);
+      for (let i = 0; i < pcm16.length; i++) {
+        floatData[i] = pcm16[i] / 32768;
+      }
+
+      const buffer = audioContextRef.current.createBuffer(1, floatData.length, 24000);
+      buffer.getChannelData(0).set(floatData);
+
+      const source = audioContextRef.current.createBufferSource();
+      source.buffer = buffer;
+      source.connect(audioContextRef.current.destination);
+
+      const currentTime = audioContextRef.current.currentTime;
+      const startTime = Math.max(currentTime, nextPlayTimeRef.current);
+      source.start(startTime);
+      nextPlayTimeRef.current = startTime + buffer.duration;
+
+      console.log(`Playing audio: ${floatData.length} samples, duration: ${buffer.duration.toFixed(2)}s`);
+    } catch (e) {
+      console.error("Error playing audio:", e);
     }
-
-    const buffer = audioContextRef.current.createBuffer(1, floatData.length, 24000);
-    buffer.getChannelData(0).set(floatData);
-
-    const source = audioContextRef.current.createBufferSource();
-    source.buffer = buffer;
-    source.connect(audioContextRef.current.destination);
-
-    const currentTime = audioContextRef.current.currentTime;
-    const startTime = Math.max(currentTime, nextPlayTimeRef.current);
-    source.start(startTime);
-    nextPlayTimeRef.current = startTime + buffer.duration;
   };
 
   const disconnect = () => {

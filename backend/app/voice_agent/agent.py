@@ -29,16 +29,32 @@ class NoiseFilter:
     Detects and ignores phrases that repeat frequently (e.g., TV/YouTube audio).
     """
 
-    def __init__(self, window_seconds: float = 10.0, repeat_threshold: int = 2):
+    # Common noise phrases from TV/YouTube/ads (lowercased)
+    KNOWN_NOISE_PHRASES = {
+        "اشتركوا في القناة",
+        "اشترك في القناة",
+        "اشتركوا",
+        "اضغط لايك",
+        "اضغط على الجرس",
+        "لا تنسوا الاشتراك",
+        "فعل الجرس",
+        "subscribe",
+        "like and subscribe",
+        "click the bell",
+        "don't forget to subscribe",
+        "hit that subscribe button",
+    }
+
+    def __init__(self, window_seconds: float = 10.0, repeat_threshold: int = 1):
         """
         Args:
             window_seconds: Time window to track phrases
-            repeat_threshold: Number of times a phrase must repeat to be considered noise
+            repeat_threshold: Number of times a phrase must repeat to be considered noise (1 = filter on first repeat)
         """
         self._window_seconds = window_seconds
         self._repeat_threshold = repeat_threshold
         self._recent_phrases: deque = deque()  # (timestamp, phrase)
-        self._noise_phrases: set = set()  # Known noise phrases
+        self._noise_phrases: set = set(p.lower() for p in self.KNOWN_NOISE_PHRASES)  # Pre-load known noise
 
     def _normalize_phrase(self, text: str) -> str:
         """Normalize phrase for comparison"""
