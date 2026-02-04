@@ -65,6 +65,7 @@ class DeepgramSTT(STTProvider):
         self.client = None
         self.connection = None
         self._last_final_text = ""
+        self._speech_started = False  # Track if we've signaled speech start
 
     async def connect(self) -> bool:
         try:
@@ -98,9 +99,9 @@ class DeepgramSTT(STTProvider):
             self.connection = self.client.listen.live.v("1")
 
             # Set up event handlers (SDK v3 uses enum events)
+            # Note: SDK v3 only has: Close, Error, Metadata, Open, Transcript, Warning
+            # SpeechStarted and UtteranceEnd are NOT available in SDK v3
             self.connection.on(LiveTranscriptionEvents.Transcript, self._on_transcript)
-            self.connection.on(LiveTranscriptionEvents.SpeechStarted, self._on_speech_started)
-            self.connection.on(LiveTranscriptionEvents.UtteranceEnd, self._on_utterance_end)
             self.connection.on(LiveTranscriptionEvents.Error, self._on_error)
 
             # Start connection
@@ -153,6 +154,11 @@ class DeepgramSTT(STTProvider):
             is_final = getattr(result, 'is_final', False)
             speech_final = getattr(result, 'speech_final', False)
 
+            # Trigger speech_started on first transcript (SDK v3 doesn't have SpeechStarted event)
+            if not self._speech_started and self.on_speech_started:
+                self._speech_started = True
+                asyncio.create_task(self.on_speech_started())
+
             event = TranscriptEvent(
                 text=transcript.strip(),
                 is_final=is_final,
@@ -168,6 +174,11 @@ class DeepgramSTT(STTProvider):
 
             if self.on_transcript:
                 asyncio.create_task(self.on_transcript(event))
+
+            # Trigger utterance_end when speech_final is True (SDK v3 doesn't have UtteranceEnd event)
+            if speech_final and self.on_utterance_end:
+                self._speech_started = False  # Reset for next utterance
+                asyncio.create_task(self.on_utterance_end())
 
         except Exception as e:
             logger.error(f"Transcript error: {e}")
@@ -187,6 +198,11 @@ class DeepgramSTT(STTProvider):
     @property
     def last_final_text(self) -> str:
         return self._last_final_text
+
+    def reset(self):
+        """Reset state for new utterance"""
+        self._speech_started = False
+        self._last_final_text = ""
 
 
 class OpenAIWhisperSTT(STTProvider):
