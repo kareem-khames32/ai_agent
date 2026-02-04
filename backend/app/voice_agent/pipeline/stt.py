@@ -80,14 +80,14 @@ class DeepgramSTT(STTProvider):
             self.client = DeepgramClient(api_key)
 
             # Create live transcription options (SDK v3)
+            # Note: SDK v3 LiveOptions doesn't have utterance_end_ms or vad_events
+            # endpointing must be a string
             options = LiveOptions(
                 model=self.config.stt_model or "nova-2",
                 language=self.config.stt_language or "ar",
                 punctuate=True,
                 interim_results=True,
-                endpointing=300,
-                utterance_end_ms=1000,
-                vad_events=True,
+                endpointing="300",
                 smart_format=True,
                 encoding="linear16",
                 sample_rate=16000,
