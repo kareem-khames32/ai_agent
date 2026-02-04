@@ -19,6 +19,7 @@ import {
   ChevronRight,
   Zap,
   Radio,
+  Workflow,
 } from "lucide-react";
 
 interface SidebarProps {
@@ -28,13 +29,16 @@ interface SidebarProps {
 
 const navigation = [
   { name: "Overview", href: "/overview", icon: LayoutDashboard },
-  { name: "Live Call", href: "/live-call", icon: Radio },
-  { name: "Test Call", href: "/test-call", icon: PhoneCall },
-  { name: "Assistants", href: "/assistants", icon: Bot },
+  // Pipeline Section
+  { name: "Pipeline Assistants", href: "/pipeline-assistants", icon: Workflow },
+  { name: "Pipeline Call", href: "/pipeline-call", icon: PhoneCall },
+  // Realtime Section
+  { name: "Realtime Assistants", href: "/realtime-assistants", icon: Zap },
+  { name: "Realtime Call", href: "/realtime-call", icon: Radio },
+  // Other
   { name: "Tools", href: "/tools", icon: Wrench },
   { name: "Phone Numbers", href: "/phone-numbers", icon: Phone },
   { name: "Voice Library", href: "/voice-library", icon: Mic },
-  { name: "Squads", href: "/squads", icon: Users },
   { name: "Call Logs", href: "/call-logs", icon: PhoneCall },
   { name: "Metrics", href: "/metrics", icon: BarChart3 },
 ];
