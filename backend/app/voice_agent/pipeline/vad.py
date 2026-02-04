@@ -127,11 +127,12 @@ class VADProcessor:
         self.sample_rate = config.sample_rate_input
 
         # Energy-based VAD parameters
-        self.energy_threshold = 0.01  # Base energy threshold
-        self.adaptive_threshold = 0.01
+        # Higher thresholds to avoid picking up background audio (TV/YouTube)
+        self.energy_threshold = 0.02  # Base energy threshold (doubled)
+        self.adaptive_threshold = 0.02
         self.adaptation_rate = 0.05
-        self.min_energy = 0.005
-        self.speech_multiplier = 3.0  # Speech should be Nx noise floor
+        self.min_energy = 0.015  # Minimum energy to consider as speech (3x higher)
+        self.speech_multiplier = 4.0  # Speech should be 4x noise floor (was 3x)
 
         # State
         self.state = VADState.SILENCE

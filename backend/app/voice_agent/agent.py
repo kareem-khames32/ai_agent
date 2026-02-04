@@ -32,6 +32,7 @@ class NoiseFilter:
 
     # Common noise phrases from TV/YouTube/ads (lowercased)
     KNOWN_NOISE_PHRASES = {
+        # Arabic YouTube phrases
         "اشتركوا في القناة",
         "اشترك في القناة",
         "اشتركوا",
@@ -39,11 +40,25 @@ class NoiseFilter:
         "اضغط على الجرس",
         "لا تنسوا الاشتراك",
         "فعل الجرس",
+        "نهاية الفيديو",
+        "شاهد الفيديو",
+        "للإحداث بأشكال التهوية",
+        "لكن تمين يا حبيبي",
+        "يا حبيبي",
+        "مشاهدة ممتعة",
+        "لا تنسوا",
+        "تابعونا",
+        "الرابط في الوصف",
+        "لينك في الوصف",
+        # English YouTube phrases
         "subscribe",
         "like and subscribe",
         "click the bell",
         "don't forget to subscribe",
         "hit that subscribe button",
+        "thanks for watching",
+        "end of video",
+        "link in description",
     }
 
     # Common single-word fillers that are often noise
