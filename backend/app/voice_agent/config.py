@@ -33,7 +33,7 @@ class VoiceAgentConfig:
     interruption_cooldown_ms: int = 150 # Short cooldown - trust browser echo cancellation
 
     # STT Settings
-    stt_provider: str = "deepgram"
+    stt_provider: str = "openai"  # openai (Whisper), deepgram, azure, groq
     stt_api_key: Optional[str] = None   # Will use env if None
     stt_language: str = "ar"            # Arabic
     stt_model: str = "nova-2"
@@ -128,7 +128,7 @@ def create_config_from_assistant(
     config = VoiceAgentConfig()
 
     # === STT Configuration ===
-    stt_provider = assistant.get("transcriber_provider", "deepgram").lower()
+    stt_provider = assistant.get("transcriber_provider", "openai").lower()
     config.stt_provider = stt_provider
     config.stt_language = assistant.get("transcriber_language", "ar")
 

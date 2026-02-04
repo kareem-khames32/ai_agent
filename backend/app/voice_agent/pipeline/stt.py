@@ -580,7 +580,7 @@ class STTStreamer:
 
     async def connect(self) -> bool:
         """Connect to STT provider"""
-        provider_name = (self.config.stt_provider or "deepgram").lower()
+        provider_name = (self.config.stt_provider or "openai").lower()
         self._current_provider_name = provider_name
 
         logger.info(f"🎤 Connecting to STT provider: {provider_name}")
@@ -588,9 +588,9 @@ class STTStreamer:
         # Create provider instance
         self.provider = self._create_provider(provider_name)
         if not self.provider:
-            logger.warning(f"Unknown STT provider: {provider_name}, using Deepgram")
-            self.provider = DeepgramSTT(self.config)
-            self._current_provider_name = "deepgram"
+            logger.warning(f"Unknown STT provider: {provider_name}, using OpenAI Whisper")
+            self.provider = OpenAIWhisperSTT(self.config)
+            self._current_provider_name = "openai"
 
         # Set up callbacks
         self.provider.on_transcript = self._on_transcript
