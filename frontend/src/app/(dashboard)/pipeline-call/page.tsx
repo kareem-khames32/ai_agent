@@ -358,7 +358,7 @@ export default function PipelineCallPage() {
     console.log("Audio queue cleared");
   };
 
-  const playAudio = (base64Audio: string) => {
+  const playAudio = async (base64Audio: string) => {
     if (!audioContextRef.current) {
       console.error("No audio context for playback");
       return;
@@ -371,36 +371,57 @@ export default function PipelineCallPage() {
         bytes[i] = binaryString.charCodeAt(i);
       }
 
-      const pcm16 = new Int16Array(bytes.buffer);
-      const floatData = new Float32Array(pcm16.length);
-      for (let i = 0; i < pcm16.length; i++) {
-        floatData[i] = pcm16[i] / 32768;
-      }
+      // Detect if it's MP3 (starts with 0xFF 0xFB or ID3)
+      const isMP3 = (bytes[0] === 0xFF && (bytes[1] & 0xE0) === 0xE0) ||
+                    (bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33); // ID3
 
-      const buffer = audioContextRef.current.createBuffer(1, floatData.length, 24000);
-      buffer.getChannelData(0).set(floatData);
+      if (isMP3) {
+        // Decode MP3 using Web Audio API
+        const audioBuffer = await audioContextRef.current.decodeAudioData(bytes.buffer.slice(0));
+        const source = audioContextRef.current.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(audioContextRef.current.destination);
 
-      const source = audioContextRef.current.createBufferSource();
-      source.buffer = buffer;
-      source.connect(audioContextRef.current.destination);
+        const currentTime = audioContextRef.current.currentTime;
+        const startTime = Math.max(currentTime, nextPlayTimeRef.current);
+        source.start(startTime);
+        nextPlayTimeRef.current = startTime + audioBuffer.duration;
 
-      const currentTime = audioContextRef.current.currentTime;
-      const startTime = Math.max(currentTime, nextPlayTimeRef.current);
-      source.start(startTime);
-      nextPlayTimeRef.current = startTime + buffer.duration;
+        activeAudioSourcesRef.current.push(source);
+        source.onended = () => {
+          const idx = activeAudioSourcesRef.current.indexOf(source);
+          if (idx !== -1) activeAudioSourcesRef.current.splice(idx, 1);
+        };
 
-      // Track this source so we can stop it on barge-in
-      activeAudioSourcesRef.current.push(source);
-
-      // Remove from list when done playing
-      source.onended = () => {
-        const idx = activeAudioSourcesRef.current.indexOf(source);
-        if (idx !== -1) {
-          activeAudioSourcesRef.current.splice(idx, 1);
+        console.log(`Playing MP3: ${audioBuffer.duration.toFixed(2)}s`);
+      } else {
+        // Handle as PCM (16-bit signed, 24kHz)
+        const pcm16 = new Int16Array(bytes.buffer);
+        const floatData = new Float32Array(pcm16.length);
+        for (let i = 0; i < pcm16.length; i++) {
+          floatData[i] = pcm16[i] / 32768;
         }
-      };
 
-      console.log(`Playing audio: ${floatData.length} samples, duration: ${buffer.duration.toFixed(2)}s`);
+        const buffer = audioContextRef.current.createBuffer(1, floatData.length, 24000);
+        buffer.getChannelData(0).set(floatData);
+
+        const source = audioContextRef.current.createBufferSource();
+        source.buffer = buffer;
+        source.connect(audioContextRef.current.destination);
+
+        const currentTime = audioContextRef.current.currentTime;
+        const startTime = Math.max(currentTime, nextPlayTimeRef.current);
+        source.start(startTime);
+        nextPlayTimeRef.current = startTime + buffer.duration;
+
+        activeAudioSourcesRef.current.push(source);
+        source.onended = () => {
+          const idx = activeAudioSourcesRef.current.indexOf(source);
+          if (idx !== -1) activeAudioSourcesRef.current.splice(idx, 1);
+        };
+
+        console.log(`Playing PCM: ${floatData.length} samples, ${buffer.duration.toFixed(2)}s`);
+      }
     } catch (e) {
       console.error("Error playing audio:", e);
     }

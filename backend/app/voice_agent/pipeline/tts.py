@@ -146,7 +146,7 @@ class ElevenLabsTTS(TTSProvider):
                 json={
                     "text": text,
                     "model_id": "eleven_multilingual_v2",
-                    "output_format": "pcm_24000",
+                    "output_format": "mp3_22050_32",
                     "voice_settings": {
                         "stability": 0.5,
                         "similarity_boost": 0.8
