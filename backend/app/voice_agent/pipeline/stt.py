@@ -39,6 +39,7 @@ class STTProvider:
     def __init__(self, config: VoiceAgentConfig):
         self.config = config
         self.is_connected = False
+        self._consecutive_errors = 0  # Track errors for fallback
         self.on_transcript: Optional[Callable[[TranscriptEvent], Awaitable[None]]] = None
         self.on_speech_started: Optional[Callable[[], Awaitable[None]]] = None
         self.on_utterance_end: Optional[Callable[[], Awaitable[None]]] = None
@@ -261,6 +262,7 @@ class OpenAIWhisperSTT(STTProvider):
                 )
 
                 if response.status_code == 200:
+                    self._consecutive_errors = 0  # Reset on success
                     result = response.json()
                     text = result.get("text", "").strip()
                     if text:
@@ -276,7 +278,11 @@ class OpenAIWhisperSTT(STTProvider):
                         logger.info(f"📝 Whisper STT: \"{text}\"")
                         if self.on_transcript:
                             await self.on_transcript(event)
+                else:
+                    self._consecutive_errors += 1
+                    logger.error(f"Whisper STT error: {response.status_code}")
         except Exception as e:
+            self._consecutive_errors += 1
             logger.error(f"Whisper STT error: {e}")
         finally:
             self._processing = False
@@ -505,6 +511,7 @@ class GroqWhisperSTT(STTProvider):
                 )
 
                 if response.status_code == 200:
+                    self._consecutive_errors = 0  # Reset on success
                     result = response.json()
                     text = result.get("text", "").strip()
                     if text:
@@ -520,7 +527,11 @@ class GroqWhisperSTT(STTProvider):
                         logger.info(f"📝 Groq STT: \"{text}\"")
                         if self.on_transcript:
                             await self.on_transcript(event)
+                else:
+                    self._consecutive_errors += 1
+                    logger.error(f"Groq STT error: {response.status_code}")
         except Exception as e:
+            self._consecutive_errors += 1
             logger.error(f"Groq STT error: {e}")
         finally:
             self._processing = False
@@ -539,36 +550,87 @@ class STTStreamer:
     """
     Multi-provider STT Streamer
     Automatically selects provider based on config
+    With automatic fallback on provider failure
     """
+
+    # Fallback order when a provider fails
+    FALLBACK_ORDER = ["deepgram", "openai", "groq", "azure"]
 
     def __init__(self, config: VoiceAgentConfig):
         self.config = config
         self.provider: Optional[STTProvider] = None
         self._last_final_text = ""
+        self._current_provider_name = ""
+        self._consecutive_errors = 0
+        self._max_errors_before_fallback = 3
+        self._tried_providers: set = set()
+        self._switching_provider = False
 
         # Callbacks to be forwarded
         self.on_transcript: Optional[Callable[[TranscriptEvent], Awaitable[None]]] = None
         self.on_speech_started: Optional[Callable[[], Awaitable[None]]] = None
         self.on_utterance_end: Optional[Callable[[], Awaitable[None]]] = None
 
+    def _create_provider(self, provider_name: str) -> Optional[STTProvider]:
+        """Create a provider instance by name"""
+        provider_name = provider_name.lower()
+
+        if provider_name == "deepgram":
+            return DeepgramSTT(self.config)
+        elif provider_name in ["openai", "whisper"]:
+            return OpenAIWhisperSTT(self.config)
+        elif provider_name == "groq":
+            return GroqWhisperSTT(self.config)
+        elif provider_name == "azure":
+            return AzureWhisperSTT(self.config)
+        return None
+
+    async def _try_fallback_provider(self) -> bool:
+        """Try to connect to a fallback STT provider"""
+        for provider_name in self.FALLBACK_ORDER:
+            if provider_name in self._tried_providers:
+                continue
+            if provider_name == self._current_provider_name:
+                continue
+
+            logger.warning(f"🔄 Trying fallback STT provider: {provider_name}")
+            self._tried_providers.add(provider_name)
+
+            # Close current provider
+            if self.provider:
+                await self.provider.close()
+
+            # Create and connect new provider
+            self.provider = self._create_provider(provider_name)
+            if self.provider:
+                self.provider.on_transcript = self._on_transcript
+                self.provider.on_speech_started = self.on_speech_started
+                self.provider.on_utterance_end = self.on_utterance_end
+
+                if await self.provider.connect():
+                    self._current_provider_name = provider_name
+                    self._consecutive_errors = 0
+                    logger.info(f"✅ Switched to fallback STT: {provider_name}")
+                    return True
+
+        logger.error("❌ All STT providers failed!")
+        return False
+
     async def connect(self) -> bool:
         """Connect to STT provider"""
         provider_name = (self.config.stt_provider or "deepgram").lower()
+        self._current_provider_name = provider_name
+        self._tried_providers.add(provider_name)
 
         logger.info(f"🎤 Connecting to STT provider: {provider_name}")
 
         # Create provider instance
-        if provider_name == "deepgram":
-            self.provider = DeepgramSTT(self.config)
-        elif provider_name in ["openai", "whisper"]:
-            self.provider = OpenAIWhisperSTT(self.config)
-        elif provider_name == "groq":
-            self.provider = GroqWhisperSTT(self.config)
-        elif provider_name == "azure":
-            self.provider = AzureWhisperSTT(self.config)
-        else:
+        self.provider = self._create_provider(provider_name)
+        if not self.provider:
             logger.warning(f"Unknown STT provider: {provider_name}, using Deepgram")
             self.provider = DeepgramSTT(self.config)
+            self._current_provider_name = "deepgram"
+            self._tried_providers.add("deepgram")
 
         # Set up callbacks
         self.provider.on_transcript = self._on_transcript
@@ -578,26 +640,42 @@ class STTStreamer:
         # Connect
         success = await self.provider.connect()
         if not success:
-            # Try fallback to OpenAI Whisper
-            if provider_name != "openai":
-                logger.warning(f"{provider_name} failed, trying OpenAI Whisper fallback")
-                self.provider = OpenAIWhisperSTT(self.config)
-                self.provider.on_transcript = self._on_transcript
-                success = await self.provider.connect()
+            # Try fallback providers
+            success = await self._try_fallback_provider()
 
         return success
 
     async def _on_transcript(self, event: TranscriptEvent):
         """Forward transcript event"""
+        # Reset error count on successful transcript
+        self._consecutive_errors = 0
+
         if event.is_final:
             self._last_final_text = event.text
         if self.on_transcript:
             await self.on_transcript(event)
 
+    def _check_provider_errors(self):
+        """Check if provider has too many errors and needs fallback"""
+        if self.provider and hasattr(self.provider, '_consecutive_errors'):
+            if self.provider._consecutive_errors >= self._max_errors_before_fallback:
+                return True
+        return False
+
     async def send_audio(self, audio_chunk: bytes):
         """Send audio to STT provider"""
-        if self.provider:
-            await self.provider.send_audio(audio_chunk)
+        if not self.provider:
+            return
+
+        await self.provider.send_audio(audio_chunk)
+
+        # Check for provider errors and trigger fallback (only once)
+        if self._check_provider_errors() and not self._switching_provider:
+            self._switching_provider = True
+            logger.warning(f"⚠️ {self._current_provider_name} has too many errors, switching...")
+            switched = await self._try_fallback_provider()
+            if switched:
+                self._switching_provider = False
 
     async def close(self):
         """Close STT connection"""
