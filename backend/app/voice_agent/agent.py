@@ -27,6 +27,7 @@ class NoiseFilter:
     """
     Filter for background noise and repeated phrases.
     Detects and ignores phrases that repeat frequently (e.g., TV/YouTube audio).
+    Also filters TTS echo (phrases the AI just said).
     """
 
     # Common noise phrases from TV/YouTube/ads (lowercased)
@@ -45,6 +46,12 @@ class NoiseFilter:
         "hit that subscribe button",
     }
 
+    # Common single-word fillers that are often noise
+    FILLER_WORDS = {
+        "شكرا", "شكراً", "الله", "ها", "آه", "اه", "امم", "يعني",
+        "ok", "okay", "um", "uh", "ah", "yeah", "yes", "no",
+    }
+
     def __init__(self, window_seconds: float = 10.0, repeat_threshold: int = 1):
         """
         Args:
@@ -55,6 +62,8 @@ class NoiseFilter:
         self._repeat_threshold = repeat_threshold
         self._recent_phrases: deque = deque()  # (timestamp, phrase)
         self._noise_phrases: set = set(p.lower() for p in self.KNOWN_NOISE_PHRASES)  # Pre-load known noise
+        self._ai_recent_text: str = ""  # Track what AI recently said for echo filtering
+        self._ai_text_time: float = 0.0  # When AI text was set
 
     def _normalize_phrase(self, text: str) -> str:
         """Normalize phrase for comparison"""
@@ -66,6 +75,37 @@ class NoiseFilter:
         now = time.time()
         while self._recent_phrases and (now - self._recent_phrases[0][0]) > self._window_seconds:
             self._recent_phrases.popleft()
+
+    def set_ai_text(self, text: str):
+        """Set what the AI is currently saying (for echo filtering)"""
+        self._ai_recent_text = text.lower() if text else ""
+        self._ai_text_time = time.time()
+
+    def _is_echo(self, text: str) -> bool:
+        """Check if text is likely TTS echo (AI said this recently)"""
+        if not self._ai_recent_text:
+            return False
+
+        # Only check for echo within 5 seconds of AI speaking
+        if time.time() - self._ai_text_time > 5.0:
+            return False
+
+        normalized = self._normalize_phrase(text)
+
+        # Check if the text appears in what AI recently said
+        if normalized in self._ai_recent_text:
+            logger.debug(f"🔇 Echo detected: \"{text}\" (AI said this)")
+            return True
+
+        return False
+
+    def _is_filler(self, text: str) -> bool:
+        """Check if text is a single-word filler"""
+        normalized = self._normalize_phrase(text)
+        if normalized in self.FILLER_WORDS:
+            logger.debug(f"🔇 Filler word: \"{text}\"")
+            return True
+        return False
 
     def is_noise(self, text: str) -> bool:
         """
@@ -80,6 +120,10 @@ class NoiseFilter:
         # Check if it's a known noise phrase
         if normalized in self._noise_phrases:
             logger.debug(f"🔇 Known noise phrase: \"{text}\"")
+            return True
+
+        # Check if it's TTS echo
+        if self._is_echo(text):
             return True
 
         # Cleanup old entries
@@ -102,6 +146,8 @@ class NoiseFilter:
     def reset(self):
         """Reset the filter (but keep known noise phrases)"""
         self._recent_phrases.clear()
+        self._ai_recent_text = ""
+        self._ai_text_time = 0.0
 
 
 class AgentState(Enum):
@@ -613,6 +659,9 @@ class VoiceAgent:
 
         # Track what AI is saying (for barge-in context)
         self._current_ai_response += sentence + " "
+
+        # Update noise filter with AI text (for echo detection)
+        self._noise_filter.set_ai_text(self._current_ai_response)
 
         # Track pending TTS
         self._pending_tts_count += 1
