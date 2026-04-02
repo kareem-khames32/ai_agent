@@ -42,6 +42,8 @@ class AdvancedSettings(BaseModel):
 
 class AssistantBase(BaseModel):
     """Base assistant schema"""
+    model_config = {"protected_namespaces": ()}
+
     name: str = Field(..., min_length=1, max_length=255)
 
     # Model config
@@ -82,6 +84,8 @@ class AssistantCreate(AssistantBase):
 
 class AssistantUpdate(BaseModel):
     """Update assistant schema"""
+    model_config = {"protected_namespaces": ()}
+
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     model_provider: Optional[str] = None
     model_name: Optional[str] = None

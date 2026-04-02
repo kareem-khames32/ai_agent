@@ -28,12 +28,6 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
 
 
-class LoginResponse(BaseModel):
-    """Login response with user and tokens"""
-    user: "UserResponse"
-    tokens: TokenResponse
-
-
 class UserResponse(BaseModel):
     """User response schema"""
     id: UUID
@@ -45,6 +39,12 @@ class UserResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class LoginResponse(BaseModel):
+    """Login response with user and tokens"""
+    user: UserResponse
+    tokens: TokenResponse
 
 
 class RefreshTokenRequest(BaseModel):
